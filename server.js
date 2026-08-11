@@ -19,7 +19,7 @@ const wss = new WebSocket.Server({ server });
 // HARUS SAMA PERSIS dengan STICKER_LIST di index.html (client),
 // karena ID inilah yang dipetakan ke file gambar/stiker/<id>.mp4
 // =============================================
-const STICKER_IDS = new Set(['jempol', 'tertawa', 'kaget', 'cinta']);
+const STICKER_IDS = new Set(['nangis', 'jempol', 'tertawa', 'tengil']);
 
 // =============================================
 // DATA KARTU & PROVINSI
