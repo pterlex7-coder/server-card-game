@@ -15,6 +15,13 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 // =============================================
+// FITUR STIKER — daftar ID yang valid (whitelist).
+// HARUS SAMA PERSIS dengan STICKER_LIST di index.html (client),
+// karena ID inilah yang dipetakan ke file gambar/stiker/<id>.mp4
+// =============================================
+const STICKER_IDS = new Set(['jempol', 'tertawa', 'kaget', 'cinta']);
+
+// =============================================
 // DATA KARTU & PROVINSI
 // =============================================
 const ALL_PROVINCES = [
@@ -3564,6 +3571,29 @@ wss.on('connection', (socket) => {
                             if (rp) rp.ping = typeof data.ping === 'number' ? data.ping : null;
                             const pings = room.players.map(p => ({ id: p.id, name: p.name, ping: p.ping ?? null }));
                             room.gameEngine.broadcastToAll({ type: 'PING_DATA', pings });
+                        }
+                    }
+                    break;
+
+                case 'SEND_STICKER':
+                    if (currentPlayer && data.roomId && STICKER_IDS.has(data.stickerId)) {
+                        const room = matchmaking.getRoom(data.roomId);
+                        if (room) {
+                            const rp = room.players.find(p => p.id === currentPlayer.id);
+                            const now = Date.now();
+                            // [ANTI-SPAM] Rate limit server-side 3 detik per pemain, terlepas dari klien.
+                            // Ini mencegah klien yang dimodifikasi mengirim stiker lebih cepat dari cooldown UI.
+                            if (rp) {
+                                if (rp.lastStickerAt && (now - rp.lastStickerAt) < 3000) break;
+                                rp.lastStickerAt = now;
+                            }
+                            room.gameEngine.broadcastToAll({
+                                type: 'STICKER_RECEIVED',
+                                playerId: currentPlayer.id,
+                                playerName: currentPlayer.name,
+                                stickerId: data.stickerId,
+                                ts: now
+                            });
                         }
                     }
                     break;
