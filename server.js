@@ -1195,7 +1195,7 @@ class GameEngine {
     // ======================= VOTING SISTEM HAK TAHAP 1 =======================
     // Menggantikan pengambilalihan otomatis oleh sistem ("Sistem menjatuhkan...").
     // Ketika tidak ada satu pun pemain yang "berhak" main duluan di Tahap 1, hak itu
-    // diperebutkan lewat voting: Kartu Hitam/Putih (≥3 peserta, minoritas menang &
+    // diperebutkan lewat voting: Kartu Hitam/Putih (≥3 peserta, suara lebih sedikit menang &
     // lanjut ke ronde berikutnya, mayoritas tersingkir) atau Suit Gunting-Batu-Kertas
     // (persis 2 peserta). Seri → voting/suit diulang. Hasil akhir menyisakan 1 pemenang.
 
@@ -1232,7 +1232,7 @@ class GameEngine {
             type: 'VOTING_START',
             mode,
             roundNum: this.gs.votingRoundNum,
-            duration: 7000,
+            duration: 10000,
             serverNow: Date.now(),
             participants: participantIds.map(id => {
                 const p = this.gs.players.find(pp => pp.id === id);
@@ -1245,12 +1245,12 @@ class GameEngine {
         participantIds.forEach(id => {
             const p = this.gs.players.find(pp => pp.id === id);
             if (p && p.isBot) {
-                const delay = 300 + Math.floor(Math.random() * 2500);
+                const delay = 1000 + Math.floor(Math.random() * 3000); // jeda acak 1-4 detik
                 setTimeout(() => this.recordVoteChoice(id, this.randomVoteChoice(mode)), delay);
             }
         });
 
-        // Batas waktu voting: 7 detik. Token ronde mencegah timer basi (stale) menembak ronde berikutnya.
+        // Batas waktu voting: 10 detik. Token ronde mencegah timer basi (stale) menembak ronde berikutnya.
         if (this._votingTimer) clearTimeout(this._votingTimer);
         const thisRoundToken = this.gs.votingRoundNum;
         const checkVotingTimeout = () => {
@@ -1258,7 +1258,7 @@ class GameEngine {
             if (this.gs.isPaused) { this._votingTimer = setTimeout(checkVotingTimeout, 1000); return; } // tunggu resume
             this.finalizeVotingRound();
         };
-        this._votingTimer = setTimeout(checkVotingTimeout, 7000);
+        this._votingTimer = setTimeout(checkVotingTimeout, 10000);
     }
 
     randomVoteChoice(mode) {
@@ -1284,7 +1284,7 @@ class GameEngine {
         // Kirim progres TANPA membocorkan pilihan — cuma daftar id yang sudah memilih (slot jadi "terisi tapi tertutup")
         this.broadcastToAll({ type: 'VOTING_PROGRESS', votedIds: Object.keys(this.gs.votingChoices) });
 
-        // Kalau semua peserta sudah memilih, langsung selesaikan tanpa menunggu sisa waktu 7 detik
+        // Kalau semua peserta sudah memilih, langsung selesaikan tanpa menunggu sisa waktu 10 detik
         if (Object.keys(this.gs.votingChoices).length >= this.gs.votingParticipants.length) {
             if (this._votingTimer) { clearTimeout(this._votingTimer); this._votingTimer = null; }
             this.finalizeVotingRound();
@@ -1296,7 +1296,7 @@ class GameEngine {
         const participantIds = this.gs.votingParticipants;
         const mode = this.gs.votingMode;
 
-        // Siapa pun yang belum memilih setelah 7 detik → dipilihkan acak oleh sistem, dihitung sebagai pilihan mereka
+        // Siapa pun yang belum memilih setelah 10 detik → dipilihkan acak oleh sistem, dihitung sebagai pilihan mereka
         participantIds.forEach(id => {
             if (!this.gs.votingChoices[id]) this.gs.votingChoices[id] = this.randomVoteChoice(mode);
         });
@@ -1322,12 +1322,12 @@ class GameEngine {
             return;
         }
 
-        // Kelompok minoritas menang & lanjut ke ronde voting berikutnya; mayoritas tersingkir
+        // Kelompok dengan suara lebih sedikit menang & lanjut ke ronde voting berikutnya; kelompok suara terbanyak tersingkir
         const winners = white.length < black.length ? white : black;
         const winnerLabel = white.length < black.length ? 'Putih' : 'Hitam';
         const loserLabel = white.length < black.length ? 'Hitam' : 'Putih';
         const winnerNames = winners.map(id => this.gs.players.find(p => p.id === id)?.name).filter(Boolean).join(', ');
-        this.broadcastLog(`✅ Kelompok ${winnerLabel} (minoritas: ${winners.length}) menang! ${winnerNames} lanjut. Kelompok ${loserLabel} tersingkir.`);
+        this.broadcastLog(`✅ Kelompok ${winnerLabel} (suara lebih sedikit: ${winners.length}) menang! ${winnerNames} lanjut. Kelompok ${loserLabel} tersingkir.`);
         setTimeout(() => { if (!this.gs.gameOver) this.runVotingRound(winners); }, 2200);
     }
 
@@ -4070,7 +4070,7 @@ function restoreSnapshot() {
                         .map(p => ({ id: p.id, name: p.name, socket: null, userUid: p.userUid }))
                 };
                 matchmaking.rooms.set(roomId, room);
-                // [VOTING TAHAP 1] Kalau server restart persis di tengah voting (jendela ~7 detik),
+                // [VOTING TAHAP 1] Kalau server restart persis di tengah voting (jendela ~10 detik),
                 // snapshot tidak menyimpan pilihan yang belum final — mulai ulang voting dari awal.
                 if (ge.gs.phase === 1 && !ge.gs.phase1Player && !ge.gs.gameOver) {
                     setTimeout(() => ge.startPhase1Voting(), 1500);
