@@ -985,8 +985,8 @@ class GameEngine {
     logDrawLevels() {
         const active = this.getActivePlayers();
         if (active.length === 0) return;
-        const logParts = active.map(p => `${p.name}: ${LEVEL_NAMES[p.drawLevel]}(${p.drawCount} draws)`);
-        this.broadcastLog(`📊 Draw Level: ${logParts.join(' | ')}`);
+        const logParts = active.map(p => `${p.name}: ${LEVEL_NAMES[p.drawLevel]} (${p.drawCount}x tambah kartu)`);
+        this.broadcastLog(`📊 Level Kartu: ${logParts.join(' | ')}`);
         // Tampilkan stok kartu tersisa per provinsi di drawPile — SERVER ONLY (tidak dikirim ke pemain)
         const provinceStock = {};
         for (const card of this.gs.drawPile) {
@@ -1006,7 +1006,7 @@ class GameEngine {
         // namun kita tetap validasi ulang ketersediaan kartu setelah setiap remove.
         if (this.gs.drawPile.length === 0) {
             player.mustForcePick = true; player.mustDraw = false;
-            this.broadcastLog(`⚠️ Draw Pile habis! ${player.name} → Force Pick`);
+            this.broadcastLog(`⚠️ Tumpukan Kartu habis! ${player.name} → Ambil Kartu`);
             return false;
         }
         // Bangun set semua kartu yang sudah dipegang: tangan semua pemain + topCard
@@ -1020,7 +1020,7 @@ class GameEngine {
         const availableCards = this.gs.drawPile.filter(c => !usedIds.has(c.id));
         if (availableCards.length === 0) {
             player.mustForcePick = true; player.mustDraw = false;
-            this.broadcastLog(`⚠️ Draw Pile habis! ${player.name} → Force Pick`);
+            this.broadcastLog(`⚠️ Tumpukan Kartu habis! ${player.name} → Ambil Kartu`);
             return false;
         }
 
@@ -1075,7 +1075,7 @@ class GameEngine {
         const newLevel = calcDrawLevel(player.drawCount);
         if (newLevel > player.drawLevel) {
             player.drawLevel = newLevel;
-            this.broadcastLog(`⬆️ ${player.name} naik ke Draw ${LEVEL_NAMES[newLevel]}! (${player.drawCount} draws)`);
+            this.broadcastLog(`⬆️ ${player.name} naik ke ${LEVEL_NAMES[newLevel]}! (${player.drawCount}x tambah kartu)`);
         }
         // ── Tentukan rarity tertinggi yang masih tersedia di drawPile (setelah kartu ini diambil) ──
         // Hierarki: mythic > legendary > epic > rareplus > rarestar > rare > uncommon > uncommonplus > commonplus > common
@@ -1093,12 +1093,12 @@ class GameEngine {
             player.drawLevel = 1;
             player.drawCount = 0;
             player.drawProb = 0;
-            this.broadcastLog(`\uD83D\uDD04 ${player.name} dapat [${resetReason}] (tertinggi)! Draw Level reset ke Lv1.`);
+            this.broadcastLog(`\uD83D\uDD04 ${player.name} dapat [${resetReason}] (tertinggi)! Level Kartu reset ke Lv1.`);
         }
         const probPct  = Math.round(prob * 100);
         const isMatch  = chosen.province === this.gs.currentProvince;
         const modeStr  = useMatching ? `✅ Cocok [prob ${probPct}%]` : `❌ Non-Cocok [prob ${probPct}%]`;
-        this.broadcastLog(`🎴 ${player.name} [${LEVEL_NAMES[level]}] draw: ${chosen.name} (${chosen.rarity}/${chosen.province}) ${modeStr}`);
+        this.broadcastLog(`🎴 ${player.name} [${LEVEL_NAMES[level]}] tambah kartu: ${chosen.name} (${chosen.rarity}/${chosen.province}) ${modeStr}`);
         return true;
     }
 
@@ -1133,7 +1133,7 @@ class GameEngine {
             }
         });
 
-        this.broadcastLog(`🎮 Game dimulai! Setiap pemain mendapat 8 kartu (1 kartu tiap rarity: epik → dasar). Mistik & Legendaris hanya via draw card.`);
+        this.broadcastLog(`🎮 Game dimulai! Setiap pemain mendapat 8 kartu (1 kartu tiap rarity: epik → dasar). Mistik & Legendaris hanya bisa didapat lewat tambah kartu.`);
         setTimeout(() => this.startPhase1(), 500);
     }
 
@@ -1203,7 +1203,7 @@ class GameEngine {
             card = this.gs.drawPile.pop();
         } else if (this.gs.discardPile.length > 0) {
             card = this.gs.discardPile.splice(Math.floor(Math.random() * this.gs.discardPile.length), 1)[0];
-            this.broadcastLog(`♻️ Draw Pile habis! Ambil dari Discard Pile`);
+            this.broadcastLog(`♻️ Tumpukan Kartu habis! Ambil dari Tumpukan Buangan`);
         } else {
             this.broadcastLog(`❌ Tidak ada kartu tersisa! Game berakhir.`);
             this.endGame(); return;
@@ -1442,7 +1442,7 @@ class GameEngine {
         // pemain yang mustDraw hanya perlu 1x draw dan tidak perlu jatuhkan kartu (ronde bisa berganti).
         const noMatchingAnywhere = !matchingInDraw && !drawPileEmpty;
         if (noMatchingAnywhere) {
-            this.broadcastLog(`🚫 Kartu dari provinsi ${this.gs.currentProvince} pada kartu tersisa telah habis! Pemain cukup 1x draw saja.`);
+            this.broadcastLog(`🚫 Kartu dari provinsi ${this.gs.currentProvince} pada kartu tersisa telah habis! Pemain cukup 1x tambah kartu saja.`);
         }
 
         this.getActivePlayers().forEach(player => {
@@ -1573,7 +1573,7 @@ class GameEngine {
     startSimultaneousDraw(mustDrawBots) {
         if (this.gs.gameOver) return;
         if (mustDrawBots.length === 0) return;
-        this.broadcastLog(`🎴 Bot draw serentak! (${mustDrawBots.map(p => p.name).join(', ')})`);
+        this.broadcastLog(`🎴 Bot tambah kartu serentak! (${mustDrawBots.map(p => p.name).join(', ')})`);
 
         mustDrawBots.forEach((bot, idx) => {
             setTimeout(() => {
@@ -1596,7 +1596,7 @@ class GameEngine {
         if (bot.hasPlayed || bot.winner || this.gs.gameOver) return;
         const drewOk = this.dealCard(bot);
         if (!drewOk) {
-            this.broadcastLog(`⚠️ ${bot.name} gagal Draw - Draw Pile habis → Force Pick`);
+            this.broadcastLog(`⚠️ ${bot.name} gagal Tambah Kartu - Tumpukan Kartu habis → Ambil Kartu`);
             this.broadcastGameState(); return;
         }
         const newCard = bot.hand[bot.hand.length - 1];
@@ -1608,7 +1608,7 @@ class GameEngine {
             bot.drawOnceNoMatch = false;
             bot.hasPlayed = true;
             this.gs.currentRoundPlays.push({ playerId: bot.id, playerName: bot.name, card: null, power: 0, isDraw: true });
-            this.broadcastLog(`🔄 ${bot.name} draw 1x: ${newCard?.name} — provinsi ${this.gs.currentProvince} habis di kartu tersisa, selesai.`);
+            this.broadcastLog(`🔄 ${bot.name} tambah kartu 1x: ${newCard?.name} — provinsi ${this.gs.currentProvince} habis di kartu tersisa, selesai.`);
             this.broadcastGameState();
             setTimeout(() => { if (!this.gs.gameOver) this.checkPhase2End(); }, 400);
             return;
@@ -1624,7 +1624,7 @@ class GameEngine {
             // Cek apakah provinsi baru saja habis setelah draw ini
             const matchingStillInPile = this.hasMatchingInDrawPile();
             if (!matchingStillInPile && this.gs.drawPile.length > 0) {
-                this.broadcastLog(`🚫 Kartu dari provinsi ${this.gs.currentProvince} pada kartu tersisa telah habis! ${bot.name} selesai draw.`);
+                this.broadcastLog(`🚫 Kartu dari provinsi ${this.gs.currentProvince} pada kartu tersisa telah habis! ${bot.name} selesai tambah kartu.`);
                 bot.mustDraw = false;
                 bot.hasPlayed = true;
                 this.gs.currentRoundPlays.push({ playerId: bot.id, playerName: bot.name, card: null, power: 0, isDraw: true });
@@ -1633,7 +1633,7 @@ class GameEngine {
                 return;
             }
             this.gs.currentRoundPlays.push({ playerId: bot.id, playerName: bot.name, card: null, power: 0, isDraw: true });
-            this.broadcastLog(`🔄 ${bot.name} draw: ${newCard.name} (${newCard.rarity}) — belum cocok, draw lagi...`);
+            this.broadcastLog(`🔄 ${bot.name} tambah kartu: ${newCard.name} (${newCard.rarity}) — belum cocok, tambah kartu lagi...`);
             this.broadcastGameState();
             // Bot terus draw sampai dapat kartu cocok atau pile habis
             setTimeout(() => this.botDrawSimultaneous(bot), 700);
@@ -1685,7 +1685,7 @@ class GameEngine {
 
         // ── Tentukan siapa yang dibebaskan ──
         if (totalJatuhkan >= totalFP) {
-            this.broadcastLog(`⚠️ Tidak ada pembebasan - semua harus draw bergiliran`);
+            this.broadcastLog(`⚠️ Tidak ada pembebasan - semua harus ambil kartu bergiliran`);
             this.gs.drawTurnQueue = sorted;
         } else {
             const jumlahBebas = totalFP - totalJatuhkan;
@@ -1695,7 +1695,7 @@ class GameEngine {
             for (const p of bebasPlayers) {
                 p.mustForcePick = false; p.hasPlayed = true; p.freed = true;
                 if (p.isBot) p.forcedStreakCount = 0; // [STIKER BOT] dibebaskan → streak force-pick/draw putus
-                this.broadcastLog(`✅ 👤 ${p.name} DIBEBASKAN dari Force Pick! (kartu terbanyak)`);
+                this.broadcastLog(`✅ 👤 ${p.name} DIBEBASKAN dari Ambil Kartu! (kartu terbanyak)`);
             }
             this.gs.drawTurnQueue = drawPlayers;
         }
@@ -1707,7 +1707,7 @@ class GameEngine {
 
         this.gs.drawTurnIndex = 0;
         this.gs.isProcessingDrawTurn = true;
-        this.broadcastLog(`🔄 Sistem Draw Bergantian dimulai! Urutan: ${this.gs.drawTurnQueue.map(p => p.name).join(' → ')}`);
+        this.broadcastLog(`🔄 Sistem Ambil Kartu Bergiliran dimulai! Urutan: ${this.gs.drawTurnQueue.map(p => p.name).join(' → ')}`);
         this.processForcePick(this.gs.drawTurnQueue, []);
     }
 
@@ -1720,7 +1720,7 @@ class GameEngine {
             this.gs.forcePickMode = true;
             this.gs.forcePickPlayers = mustPickPlayers;
             this.gs.forcePickProcessing = false;
-            this.broadcastLog(`⚠️ ${humanMustPick.name} harus memilih kartu dari Top Card!`);
+            this.broadcastLog(`⚠️ ${humanMustPick.name} harus memilih kartu dari Kartu Atas!`);
             this.broadcastGameState();
             this.setAfkTimer(humanMustPick, () => {
                 if (!humanMustPick.hasPlayed) this.setPlayerAutoMode(humanMustPick.id, true, 'AFK');
@@ -1831,7 +1831,7 @@ class GameEngine {
                 player.drawOnceNoMatch = false;
                 player.hasPlayed = true;
                 this.gs.currentRoundPlays.push({ playerId: player.id, playerName: player.name, card: null, power: 0, isDraw: true });
-                this.broadcastLog(`🔄 ${player.name} draw 1x: ${newCard?.name} (${newCard?.rarity}) — provinsi ${this.gs.currentProvince} habis di kartu tersisa, ronde berlanjut.`);
+                this.broadcastLog(`🔄 ${player.name} tambah kartu 1x: ${newCard?.name} (${newCard?.rarity}) — provinsi ${this.gs.currentProvince} habis di kartu tersisa, ronde berlanjut.`);
                 this.broadcastGameState();
                 setTimeout(() => this.checkPhase2End(), 500);
                 return;
@@ -1861,7 +1861,7 @@ class GameEngine {
                 const matchingStillInPile = this.hasMatchingInDrawPile();
                 if (!matchingStillInPile && this.gs.drawPile.length > 0) {
                     // Provinsi baru saja habis di pile saat draw ini
-                    this.broadcastLog(`🚫 Kartu dari provinsi ${this.gs.currentProvince} pada kartu tersisa telah habis! ${player.name} selesai draw.`);
+                    this.broadcastLog(`🚫 Kartu dari provinsi ${this.gs.currentProvince} pada kartu tersisa telah habis! ${player.name} selesai tambah kartu.`);
                     player.mustDraw = false;
                     player.drawOnceNoMatch = false;
                     player.hasPlayed = true;
@@ -1874,7 +1874,7 @@ class GameEngine {
                 player.mustDraw = true;
                 player.hasPlayed = false;
                 this.gs.currentRoundPlays.push({ playerId: player.id, playerName: player.name, card: null, power: 0, isDraw: true });
-                this.broadcastLog(`🔄 ${player.name} draw: ${newCard?.name} (${newCard?.rarity}) — belum cocok.`);
+                this.broadcastLog(`🔄 ${player.name} tambah kartu: ${newCard?.name} (${newCard?.rarity}) — belum cocok.`);
                 this.broadcastGameState();
                 if (!player.isBot && !player.autoMode) {
                     // Human manual: pasang AFK timer, tunggu aksi dari client
@@ -1890,7 +1890,7 @@ class GameEngine {
             }
         } else {
             // dealCard gagal → sudah di-set mustForcePick oleh dealCard
-            this.broadcastLog(`⚠️ ${player.name} gagal Draw - Draw Pile habis → Force Pick`);
+            this.broadcastLog(`⚠️ ${player.name} gagal Tambah Kartu - Tumpukan Kartu habis → Ambil Kartu`);
             this.broadcastGameState();
             setTimeout(() => this.checkPhase2End(), 500);
         }
@@ -1969,9 +1969,9 @@ class GameEngine {
                         // Pemain punya kartu cocok di tangan → tidak perlu draw, langsung main
                         player.mustDraw = false;
                         player.drawOnceNoMatch = false;
-                        this.broadcastLog(`✅ ${player.name} punya kartu cocok di tangan — langsung jatuhkan tanpa draw.`);
+                        this.broadcastLog(`✅ ${player.name} punya kartu cocok di tangan — langsung jatuhkan tanpa tambah kartu.`);
                     } else {
-                        this.sendToPlayer(playerId, { type:'ERROR', message:'Anda harus Draw Card terlebih dahulu!' });
+                        this.sendToPlayer(playerId, { type:'ERROR', message:'Anda harus Tambah Kartu terlebih dahulu!' });
                         return;
                     }
                 }
@@ -1993,7 +1993,7 @@ class GameEngine {
             if (!this.gs.forcePickMode) return;
             if (!this.gs.forcePickPlayers.some(p => p.id === playerId)) return;
             if (player.hasPlayed) return;
-            if (!this.gs.topCard.find(c => c.id === action.cardId)) { this.sendToPlayer(playerId, { type:'ERROR', message:'Kartu tidak ada di Top Card!' }); return; }
+            if (!this.gs.topCard.find(c => c.id === action.cardId)) { this.sendToPlayer(playerId, { type:'ERROR', message:'Kartu tidak ada di Kartu Atas!' }); return; }
             this.handleForcePickCardInternal(player, action.cardId);
         }
     }
@@ -2359,7 +2359,7 @@ class GameEngine {
             if (this.gs.phase === 1 && this.gs.phase1Player === player.id && !player.hasPlayed) {
                 if (player.hand.length > 0) {
                     const card = player.hand[Math.floor(Math.random() * player.hand.length)];
-                    this.broadcastLog(`👤 AUTO: ${player.name} menjatuhkan ${card.name}`);
+                    this.broadcastLog(`👤 OTOMATIS: ${player.name} menjatuhkan ${card.name}`);
                     this.handlePlayCardInternal(player, card);
                 }
                 return;
@@ -2367,13 +2367,13 @@ class GameEngine {
             if (this.gs.phase === 2 && player.mustPlayMatching && !player.hasPlayed) {
                 const matchCard = player.hand.find(c => c.province === this.gs.currentProvince);
                 if (matchCard) {
-                    this.broadcastLog(`👤 AUTO: ${player.name} menjatuhkan kartu hasil draw: ${matchCard.name}`);
+                    this.broadcastLog(`👤 OTOMATIS: ${player.name} menjatuhkan kartu hasil tambah kartu: ${matchCard.name}`);
                     this.handlePlayCardInternal(player, matchCard);
                 }
                 return;
             }
             if (this.gs.phase === 2 && player.mustDraw && !player.hasPlayed) {
-                this.broadcastLog(`👤 AUTO: ${player.name} Draw Card`);
+                this.broadcastLog(`👤 OTOMATIS: ${player.name} Tambah Kartu`);
                 this.handleDrawCardInternal(player);
                 return;
             }
@@ -2381,7 +2381,7 @@ class GameEngine {
                 const matching = player.hand.filter(c => c.province === this.gs.currentProvince);
                 if (matching.length > 0) {
                     const card = matching[Math.floor(Math.random() * matching.length)];
-                    this.broadcastLog(`👤 AUTO: ${player.name} menjatuhkan ${card.name}`);
+                    this.broadcastLog(`👤 OTOMATIS: ${player.name} menjatuhkan ${card.name}`);
                     this.handlePlayCardInternal(player, card);
                 }
                 return;
@@ -2389,7 +2389,7 @@ class GameEngine {
             if (this.gs.phase === 2 && player.mustForcePick && !player.hasPlayed && this.gs.forcePickMode) {
                 if (this.gs.topCard.length > 0) {
                     const card = this.gs.topCard[Math.floor(Math.random() * this.gs.topCard.length)];
-                    this.broadcastLog(`👤 AUTO: ${player.name} Mengambil kartu: ${card.name}`);
+                    this.broadcastLog(`👤 OTOMATIS: ${player.name} Mengambil kartu: ${card.name}`);
                     this.handleForcePickCardInternal(player, card.id);
                 }
                 return;
