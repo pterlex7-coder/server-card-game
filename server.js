@@ -851,7 +851,9 @@ class GameEngine {
             currentRoundPlays: [], roundHistory: [],
             winners: [], gameOver: false, surrenderCount: 0,
             drawTurnQueue: [], drawTurnIndex: 0, isProcessingDrawTurn: false, drawTurnActive: false,
-            isPaused: false
+            isPaused: false,
+            // [VOTING TAHAP 1] Hak jatuh kartu Tahap 1 saat tidak ada pemenang otomatis
+            votingActive: false, votingMode: null, votingParticipants: [], votingChoices: {}, votingRoundNum: 0
         };
         this.hostUserUid = null; // UID host custom room (yang bisa pause)
     }
@@ -1146,6 +1148,10 @@ class GameEngine {
         this.gs.forcePickMode = false; this.gs.forcePickPlayers = [];
         this.gs.forcePickProcessing = false; this.gs.isHandlingForcePick = false;
         this.gs.drawTurnQueue = []; this.gs.drawTurnIndex = 0; this.gs.drawTurnActive = false; this.gs.isProcessingDrawTurn = false;
+        // [VOTING TAHAP 1] Reset state voting hak jatuh kartu Tahap 1 setiap ronde baru
+        if (this._votingTimer) { clearTimeout(this._votingTimer); this._votingTimer = null; }
+        this.gs.votingActive = false; this.gs.votingMode = null;
+        this.gs.votingParticipants = []; this.gs.votingChoices = {}; this.gs.votingRoundNum = 0;
         this.gs.players.forEach(p => {
             p.hasPlayed = false; p.mustDraw = false; p.mustForcePick = false;
             p.freed = false; p.isProcessingAction = false;
@@ -1157,8 +1163,9 @@ class GameEngine {
         setTimeout(() => { this.gs.isStartingPhase = false; }, 100);
         this.logDrawLevels();
         if (this.gs.round === 1) {
+            // [VOTING TAHAP 1] Ronde pertama: belum ada riwayat, semua pemain aktif berhak → voting
             this.broadcastGameState();
-            setTimeout(() => this.systemPlayPhase1(), 800);
+            setTimeout(() => this.startPhase1Voting(), 800);
             return;
         }
         const lastRound = this.gs.roundHistory[this.gs.roundHistory.length - 1];
@@ -1169,17 +1176,195 @@ class GameEngine {
             return p && !p.winner;
         });
         if (validPlays.length === 0) {
+            // [VOTING TAHAP 1] Tidak ada yang "berhak" dari ronde lalu → voting antar pemain aktif
             this.broadcastGameState();
-            setTimeout(() => this.systemPlayPhase1(), 800);
+            setTimeout(() => this.startPhase1Voting(), 800);
             return;
         }
         validPlays.sort((a, b) => b.power - a.power);
         const phase1Player = this.gs.players.find(p => p.id === validPlays[0].playerId);
         if (!phase1Player || phase1Player.winner) {
+            // [VOTING TAHAP 1] Pemenang power tertinggi ronde lalu sudah tidak valid → voting
             this.broadcastGameState();
-            setTimeout(() => this.systemPlayPhase1(), 800);
+            setTimeout(() => this.startPhase1Voting(), 800);
             return;
         }
+        this.assignPhase1Player(phase1Player);
+    }
+
+    // ======================= VOTING SISTEM HAK TAHAP 1 =======================
+    // Menggantikan pengambilalihan otomatis oleh sistem ("Sistem menjatuhkan...").
+    // Ketika tidak ada satu pun pemain yang "berhak" main duluan di Tahap 1, hak itu
+    // diperebutkan lewat voting: Kartu Hitam/Putih (≥3 peserta, minoritas menang &
+    // lanjut ke ronde berikutnya, mayoritas tersingkir) atau Suit Gunting-Batu-Kertas
+    // (persis 2 peserta). Seri → voting/suit diulang. Hasil akhir menyisakan 1 pemenang.
+
+    startPhase1Voting() {
+        const eligible = this.getActivePlayers().filter(p => !p.leftMatch);
+        if (eligible.length === 0) { this.systemPlayPhase1(); return; }
+        this.gs.votingRoundNum = 0;
+        this.runVotingRound(eligible.map(p => p.id));
+    }
+
+    runVotingRound(participantIds) {
+        // Saring ulang: hanya pemain yang masih aktif (jaga-jaga race condition disconnect/menang)
+        participantIds = participantIds.filter(id => {
+            const p = this.gs.players.find(pp => pp.id === id);
+            return p && !p.winner && !p.leftMatch;
+        });
+        if (this.gs.gameOver) return;
+        if (participantIds.length === 0) { this.systemPlayPhase1(); return; }
+        if (participantIds.length === 1) { this.grantPhase1Right(participantIds[0]); return; }
+
+        this.gs.votingRoundNum++;
+        const mode = participantIds.length === 2 ? 'suit' : 'card';
+        this.gs.votingActive = true;
+        this.gs.votingMode = mode;
+        this.gs.votingParticipants = participantIds;
+        this.gs.votingChoices = {};
+
+        const names = participantIds.map(id => this.gs.players.find(p => p.id === id)?.name).filter(Boolean);
+        this.broadcastLog(mode === 'suit'
+            ? `✊✋✌️ Voting Suit (Ronde ${this.gs.votingRoundNum}) antara ${names.join(' vs ')} untuk hak jatuh kartu Tahap 1!`
+            : `🗳️ Voting Kartu Hitam/Putih (Ronde ${this.gs.votingRoundNum}) antara ${names.join(', ')} untuk hak jatuh kartu Tahap 1!`);
+
+        this.broadcastToAll({
+            type: 'VOTING_START',
+            mode,
+            roundNum: this.gs.votingRoundNum,
+            duration: 7000,
+            serverNow: Date.now(),
+            participants: participantIds.map(id => {
+                const p = this.gs.players.find(pp => pp.id === id);
+                return { id: p.id, name: p.name, isBot: p.isBot };
+            })
+        });
+        this.broadcastGameState();
+
+        // Bot langsung memilih otomatis & acak, dengan delay natural (biar tidak instan mencurigakan)
+        participantIds.forEach(id => {
+            const p = this.gs.players.find(pp => pp.id === id);
+            if (p && p.isBot) {
+                const delay = 300 + Math.floor(Math.random() * 2500);
+                setTimeout(() => this.recordVoteChoice(id, this.randomVoteChoice(mode)), delay);
+            }
+        });
+
+        // Batas waktu voting: 7 detik. Token ronde mencegah timer basi (stale) menembak ronde berikutnya.
+        if (this._votingTimer) clearTimeout(this._votingTimer);
+        const thisRoundToken = this.gs.votingRoundNum;
+        const checkVotingTimeout = () => {
+            if (!this.gs.votingActive || this.gs.votingRoundNum !== thisRoundToken) return;
+            if (this.gs.isPaused) { this._votingTimer = setTimeout(checkVotingTimeout, 1000); return; } // tunggu resume
+            this.finalizeVotingRound();
+        };
+        this._votingTimer = setTimeout(checkVotingTimeout, 7000);
+    }
+
+    randomVoteChoice(mode) {
+        return mode === 'suit'
+            ? ['batu', 'gunting', 'kertas'][Math.floor(Math.random() * 3)]
+            : (Math.random() < 0.5 ? 'putih' : 'hitam');
+    }
+
+    // Dipanggil dari message handler saat client kirim { type:'VOTE_CHOICE', choice }
+    handleVoteChoice(playerId, choice) {
+        if (!this.gs.votingActive) return;
+        if (!this.gs.votingParticipants.includes(playerId)) return;
+        this.recordVoteChoice(playerId, choice);
+    }
+
+    recordVoteChoice(playerId, choice) {
+        if (!this.gs.votingActive) return;
+        if (this.gs.votingChoices[playerId]) return; // sudah memilih, tidak boleh ganti pilihan
+        const validChoices = this.gs.votingMode === 'suit' ? ['batu', 'gunting', 'kertas'] : ['putih', 'hitam'];
+        if (!validChoices.includes(choice)) return;
+        this.gs.votingChoices[playerId] = choice;
+
+        // Kirim progres TANPA membocorkan pilihan — cuma daftar id yang sudah memilih (slot jadi "terisi tapi tertutup")
+        this.broadcastToAll({ type: 'VOTING_PROGRESS', votedIds: Object.keys(this.gs.votingChoices) });
+
+        // Kalau semua peserta sudah memilih, langsung selesaikan tanpa menunggu sisa waktu 7 detik
+        if (Object.keys(this.gs.votingChoices).length >= this.gs.votingParticipants.length) {
+            if (this._votingTimer) { clearTimeout(this._votingTimer); this._votingTimer = null; }
+            this.finalizeVotingRound();
+        }
+    }
+
+    finalizeVotingRound() {
+        if (!this.gs.votingActive) return;
+        const participantIds = this.gs.votingParticipants;
+        const mode = this.gs.votingMode;
+
+        // Siapa pun yang belum memilih setelah 7 detik → dipilihkan acak oleh sistem, dihitung sebagai pilihan mereka
+        participantIds.forEach(id => {
+            if (!this.gs.votingChoices[id]) this.gs.votingChoices[id] = this.randomVoteChoice(mode);
+        });
+
+        const choicesSnapshot = { ...this.gs.votingChoices };
+        this.gs.votingActive = false;
+
+        this.broadcastToAll({ type: 'VOTING_REVEAL', mode, choices: choicesSnapshot });
+
+        if (mode === 'suit') this.resolveSuitRound(participantIds, choicesSnapshot);
+        else this.resolveCardRound(participantIds, choicesSnapshot);
+    }
+
+    resolveCardRound(participantIds, choices) {
+        const white = participantIds.filter(id => choices[id] === 'putih');
+        const black = participantIds.filter(id => choices[id] === 'hitam');
+
+        // Seri jika: salah satu kelompok kosong (semua orang pilih sama), atau jumlah kedua kelompok sama
+        const isTie = white.length === 0 || black.length === 0 || white.length === black.length;
+        if (isTie) {
+            this.broadcastLog(`⚖️ Voting seri (Putih ${white.length} - Hitam ${black.length})! Voting diulang...`);
+            setTimeout(() => { if (!this.gs.gameOver) this.runVotingRound(participantIds); }, 2200);
+            return;
+        }
+
+        // Kelompok minoritas menang & lanjut ke ronde voting berikutnya; mayoritas tersingkir
+        const winners = white.length < black.length ? white : black;
+        const winnerLabel = white.length < black.length ? 'Putih' : 'Hitam';
+        const loserLabel = white.length < black.length ? 'Hitam' : 'Putih';
+        const winnerNames = winners.map(id => this.gs.players.find(p => p.id === id)?.name).filter(Boolean).join(', ');
+        this.broadcastLog(`✅ Kelompok ${winnerLabel} (minoritas: ${winners.length}) menang! ${winnerNames} lanjut. Kelompok ${loserLabel} tersingkir.`);
+        setTimeout(() => { if (!this.gs.gameOver) this.runVotingRound(winners); }, 2200);
+    }
+
+    resolveSuitRound(participantIds, choices) {
+        const [aId, bId] = participantIds;
+        const a = choices[aId], b = choices[bId];
+        const beats = { batu: 'gunting', gunting: 'kertas', kertas: 'batu' };
+
+        if (a === b) {
+            this.broadcastLog(`⚖️ Suit seri (${a} vs ${b})! Suit diulang...`);
+            setTimeout(() => { if (!this.gs.gameOver) this.runVotingRound(participantIds); }, 2200);
+            return;
+        }
+        const winnerId = beats[a] === b ? aId : bId;
+        const winnerName = this.gs.players.find(p => p.id === winnerId)?.name;
+        this.broadcastLog(`✅ ${winnerName} menang suit (${a} vs ${b})! Dapat hak jatuh kartu Tahap 1.`);
+        setTimeout(() => { if (!this.gs.gameOver) this.grantPhase1Right(winnerId); }, 1500);
+    }
+
+    grantPhase1Right(playerId) {
+        this.gs.votingActive = false;
+        this.gs.votingMode = null;
+        this.gs.votingParticipants = [];
+        this.gs.votingChoices = {};
+        this.broadcastToAll({ type: 'VOTING_END' });
+
+        const phase1Player = this.gs.players.find(p => p.id === playerId);
+        if (!phase1Player || phase1Player.winner || phase1Player.leftMatch) {
+            // Safety net — pemenang voting ternyata sudah tidak valid (race condition sangat jarang)
+            this.systemPlayPhase1();
+            return;
+        }
+        this.assignPhase1Player(phase1Player);
+    }
+
+    // Diekstrak dari logika lama startPhase1() supaya bisa dipakai ulang oleh grantPhase1Right()
+    assignPhase1Player(phase1Player) {
         this.gs.phase1Player = phase1Player.id;
         this.broadcastLog(`🎯 👤 ${phase1Player.name} mendapat giliran Tahap 1!`);
         if (phase1Player.isBot) {
@@ -1196,6 +1381,8 @@ class GameEngine {
         }
     }
 
+    // Fallback darurat murni (dipertahankan sebagai jaring pengaman terakhir bila voting
+    // benar-benar tidak mungkin dijalankan, misal semua peserta hilang di tengah proses)
     systemPlayPhase1() {
         if (this.gs.isPaused) { setTimeout(() => this.systemPlayPhase1(), 1000); return; }
         let card;
@@ -2046,7 +2233,8 @@ class GameEngine {
                 setTimeout(() => this.checkPhase2End(), 500);
             } else if (this.gs.phase === 1 && this.gs.phase1Player === playerId) {
                 this.gs.phase1Player = null;
-                setTimeout(() => this.systemPlayPhase1(), 500);
+                // [VOTING TAHAP 1] Pemegang hak keluar sebelum sempat main → voting ulang antar sisa pemain
+                setTimeout(() => this.startPhase1Voting(), 500);
             }
         }
     }
@@ -2252,7 +2440,12 @@ class GameEngine {
             winners: this.gs.winners.map(p => ({ id: p.id, name: p.name, rank: p.rank })),
             gameOver: this.gs.gameOver, rarityStock, provinceStock,
             highestResetRarity,
-            isPaused: this.gs.isPaused ?? false, isCustomRoom: this.isCustomRoom
+            isPaused: this.gs.isPaused ?? false, isCustomRoom: this.isCustomRoom,
+            // [VOTING TAHAP 1] Dikirim agar client yang reconnect di tengah voting bisa render ulang popup
+            votingActive: this.gs.votingActive ?? false,
+            votingMode: this.gs.votingMode ?? null,
+            votingParticipants: this.gs.votingParticipants ?? [],
+            votingVotedIds: Object.keys(this.gs.votingChoices ?? {})
         };
     }
 
@@ -3274,6 +3467,16 @@ wss.on('connection', (socket) => {
                     }
                     break;
 
+                case 'VOTE_CHOICE':
+                    // [VOTING TAHAP 1] Pemain memilih kartu hitam/putih atau gunting/batu/kertas
+                    if (currentPlayer && data.roomId) {
+                        const room = matchmaking.getRoom(data.roomId);
+                        if (room && !room.gameEngine.gs.isPaused) {
+                            room.gameEngine.handleVoteChoice(currentPlayer.id, data.choice);
+                        }
+                    }
+                    break;
+
                 case 'PAUSE_GAME': {
                     if (isCustomRoomSpectator && currentCustomRoomId && data.userUid) {
                         const room = matchmaking.getRoom(currentCustomRoomId);
@@ -3867,6 +4070,11 @@ function restoreSnapshot() {
                         .map(p => ({ id: p.id, name: p.name, socket: null, userUid: p.userUid }))
                 };
                 matchmaking.rooms.set(roomId, room);
+                // [VOTING TAHAP 1] Kalau server restart persis di tengah voting (jendela ~7 detik),
+                // snapshot tidak menyimpan pilihan yang belum final — mulai ulang voting dari awal.
+                if (ge.gs.phase === 1 && !ge.gs.phase1Player && !ge.gs.gameOver) {
+                    setTimeout(() => ge.startPhase1Voting(), 1500);
+                }
                 restored++;
                 console.log(`♻️  Room ${roomId} di-restore (${snap.gs.players.filter(p=>!p.isBot).length} pemain manusia)`);
             } catch (e) {
