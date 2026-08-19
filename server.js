@@ -580,18 +580,18 @@ function sanitizeName(name) {
 // DRAW CARD LEVEL SYSTEM
 // =============================================
 const DRAW_RATES = {
-    1: { magis:1, sakral:1, mythic:1, legendary:4, epic:6, rareplus:8, rarestar:9, rare:10, uncommon:11, uncommonplus:13, commonplus:16, common:20 },
-    2: { magis:1, sakral:1, mythic:1, legendary:2, epic:4, rareplus:7, rarestar:10, rare:11, uncommon:13, uncommonplus:15, commonplus:19, common:16 },
-    3: { magis:1, sakral:1, mythic:1, legendary:2, epic:4, rareplus:8, rarestar:11, rare:12, uncommon:14, uncommonplus:18, commonplus:15, common:13 },
-    4: { magis:1, sakral:1, mythic:1, legendary:2, epic:5, rareplus:9, rarestar:12, rare:13, uncommon:17, uncommonplus:15, commonplus:13, common:11 },
-    5: { magis:1, sakral:1, mythic:1, legendary:1, epic:8, rareplus:11, rarestar:13, rare:16, uncommon:14, uncommonplus:13, commonplus:11, common:10 },
-    6: { magis:1, sakral:1, mythic:1, legendary:4, epic:9, rareplus:12, rarestar:15, rare:14, uncommon:13, uncommonplus:11, commonplus:10, common:9 },
-    7: { magis:1, sakral:1, mythic:2, legendary:5, epic:12, rareplus:14, rarestar:14, rare:13, uncommon:11, uncommonplus:10, commonplus:9, common:8 },
-    8: { magis:1, sakral:1, mythic:2, legendary:11, epic:13, rareplus:14, rarestar:13, rare:11, uncommon:10, uncommonplus:9, commonplus:8, common:7 },
-    9: { magis:1, sakral:1, mythic:7, legendary:15, epic:13, rareplus:12, rarestar:11, rare:10, uncommon:9, uncommonplus:8, commonplus:7, common:6 },
-    10: { magis:1, sakral:1, mythic:18, legendary:17, epic:14, rareplus:11, rarestar:10, rare:9, uncommon:7, uncommonplus:6, commonplus:4, common:2 },
-    11: { magis:17, sakral:22, mythic:17, legendary:14, epic:11, rareplus:8, rarestar:5, rare:2, uncommon:1, uncommonplus:1, commonplus:1, common:1 },
-    12: { magis:21, sakral:19, mythic:16, legendary:13, epic:11, rareplus:8, rarestar:5, rare:3, uncommon:1, uncommonplus:1, commonplus:1, common:1 }
+    1: { magis:1, sakral:2, mythic:3, legendary:4, epic:5, rareplus:6, rarestar:7, rare:8, uncommon:9, uncommonplus:11, commonplus:16, common:28 },
+    2: { magis:1, sakral:2, mythic:3, legendary:4, epic:5, rareplus:6, rarestar:7, rare:8, uncommon:10, uncommonplus:13, commonplus:22, common:19 },
+    3: { magis:1, sakral:2, mythic:3, legendary:4, epic:5, rareplus:6, rarestar:7, rare:9, uncommon:11, uncommonplus:20, commonplus:17, common:15 },
+    4: { magis:1, sakral:2, mythic:3, legendary:4, epic:5, rareplus:6, rarestar:8, rare:10, uncommon:19, uncommonplus:16, commonplus:14, common:12 },
+    5: { magis:1, sakral:2, mythic:3, legendary:4, epic:5, rareplus:6, rarestar:9, rare:18, uncommon:16, uncommonplus:14, commonplus:12, common:10 },
+    6: { magis:1, sakral:2, mythic:3, legendary:4, epic:6, rareplus:9, rarestar:18, rare:15, uncommon:13, uncommonplus:12, commonplus:10, common:7 },
+    7: { magis:1, sakral:2, mythic:3, legendary:5, epic:10, rareplus:17, rarestar:15, rare:13, uncommon:12, uncommonplus:9, commonplus:7, common:6 },
+    8: { magis:1, sakral:2, mythic:3, legendary:10, epic:18, rareplus:15, rarestar:13, rare:11, uncommon:9, uncommonplus:7, commonplus:6, common:5 },
+    9: { magis:1, sakral:5, mythic:10, legendary:18, epic:15, rareplus:13, rarestar:11, rare:8, uncommon:7, uncommonplus:6, commonplus:4, common:2 },
+    10: { magis:5, sakral:11, mythic:18, legendary:15, epic:13, rareplus:10, rarestar:8, rare:7, uncommon:6, uncommonplus:4, commonplus:2, common:1 },
+    11: { magis:10, sakral:19, mythic:15, legendary:13, epic:11, rareplus:8, rarestar:7, rare:6, uncommon:5, uncommonplus:3, commonplus:2, common:1 },
+    12: { magis:19, sakral:16, mythic:13, legendary:11, epic:10, rareplus:8, rarestar:7, rare:6, uncommon:4, uncommonplus:3, commonplus:2, common:1 }
 };
 const RARITY_ORDER = ['magis','sakral','mythic','legendary','epic','rareplus','rarestar','rare','uncommon','uncommonplus','commonplus','common'];
 const LEVEL_NAMES = { 1:'Lv1', 2:'Lv2', 3:'Lv3', 4:'Lv4', 5:'Lv5', 6:'Lv6', 7:'Lv7', 8:'Lv8', 9:'Lv9', 10:'Lv10', 11:'Lv11', 12:'Lv12' };
