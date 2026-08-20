@@ -1938,14 +1938,14 @@ class GameEngine {
         const lastRound = this.gs.roundHistory.length > 0 ? this.gs.roundHistory[this.gs.roundHistory.length - 1] : null;
         const sorted = [...fpPlayers].sort((a, b) => {
             if (a.hand.length !== b.hand.length) return a.hand.length - b.hand.length; // kartu sedikit = depan (draw), banyak = belakang (bebas)
-            if (a.totalPower !== b.totalPower) return a.totalPower - b.totalPower; // power kecil = belakang (bebas)
+            if (a.totalPower !== b.totalPower) return b.totalPower - a.totalPower; // power besar = depan (draw), kecil = belakang (bebas)
             // Tie-breaker 3: power terbesar di ronde sebelumnya = paling belakang (bebas)
             const getPrevPower = (p) => {
                 if (!lastRound) return 0;
                 const play = lastRound.plays.find(pl => pl.playerId === p.id && !pl.isForcePickPlay);
                 return play ? play.power : 0;
             };
-            return getPrevPower(b) - getPrevPower(a); // power besar di ronde lalu = lebih belakang (bebas)
+            return getPrevPower(a) - getPrevPower(b); // power besar ronde lalu = belakang (bebas)
         });
 
         // ── Tentukan siapa yang dibebaskan ──
