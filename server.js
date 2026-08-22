@@ -576,6 +576,13 @@ function sanitizeName(name) {
     return name.trim().replace(/[\x00-\x1F\x7F]/g, '').slice(0, 30);
 }
 
+// [FIX] Label level bot — HARUS SAMA PERSIS dengan mapping di client (index.html)
+// supaya nama bot di lobi ("Bot 2 Level 3 (Sulit)") dan di dalam pertandingan
+// (player.name yang ditampilkan lewat getBotDisplayName()) identik.
+function getCustomBotLevelLabel(level) {
+    return level === 1 ? 'Mudah' : level === 2 ? 'Normal' : 'Sulit';
+}
+
 // =============================================
 // DRAW CARD LEVEL SYSTEM
 // =============================================
@@ -2086,7 +2093,8 @@ class GameEngine {
                 const level = bot.botLevel ?? 1;
                 let chosen;
                 if (level === 1) {
-                    chosen = [...this.gs.topCard].sort((a,b) => a.power - b.power)[0];
+                    // [FIX] Bot Level 1 sekarang ambil kartu POWER TERBESAR saat force pick
+                    chosen = [...this.gs.topCard].sort((a,b) => b.power - a.power)[0];
                 } else if (level === 2) {
                     chosen = [...this.gs.topCard].sort((a,b) => b.power - a.power)[0];
                 } else {
@@ -2201,11 +2209,15 @@ class GameEngine {
                     });
                 } else {
                     // Bot atau human auto mode: langsung jatuhkan
-                    setTimeout(() => {
+                    // [FIX] _doAutoPlayMatch dibuat sebagai fungsi bernama supaya bisa reschedule dirinya
+                    // sendiri berulang kali selama masih dijeda, bukan cuma retry sekali.
+                    const _doAutoPlayMatch = () => {
+                        if (this.gs.isPaused) { setTimeout(_doAutoPlayMatch, 1000); return; }
                         if (player.mustPlayMatching && !player.hasPlayed) {
                             this.handlePlayCardInternal(player, newCard);
                         }
-                    }, 800);
+                    };
+                    setTimeout(_doAutoPlayMatch, 800);
                 }
             } else {
                 // ── Kartu tidak cocok → cek apakah provinsi aktif sudah habis di pile ──
@@ -2234,9 +2246,12 @@ class GameEngine {
                     });
                 } else {
                     // Bot atau human auto mode: langsung lanjut draw tanpa tunggu
-                    setTimeout(() => {
+                    // [FIX] Recheck isPaused sebelum eksekusi, reschedule diri sendiri kalau masih dijeda
+                    const _doAutoDrawAgain = () => {
+                        if (this.gs.isPaused) { setTimeout(_doAutoDrawAgain, 1000); return; }
                         if (player.mustDraw && !player.hasPlayed) this.handleDrawCardInternal(player);
-                    }, 800);
+                    };
+                    setTimeout(_doAutoDrawAgain, 800);
                 }
             }
         } else {
@@ -2263,7 +2278,8 @@ class GameEngine {
                 const level = bot.botLevel ?? 1;
                 let chosen;
                 if (level === 1) {
-                    chosen = [...this.gs.topCard].sort((a,b) => a.power - b.power)[0];
+                    // [FIX] Bot Level 1 sekarang ambil kartu POWER TERBESAR saat force pick
+                    chosen = [...this.gs.topCard].sort((a,b) => b.power - a.power)[0];
                 } else if (level === 2) {
                     chosen = [...this.gs.topCard].sort((a,b) => b.power - a.power)[0];
                 } else {
@@ -2728,6 +2744,10 @@ class GameEngine {
         if (player.autoModeTimerId) { clearTimeout(player.autoModeTimerId); player.autoModeTimerId = undefined; }
         player.autoModeTimerId = setTimeout(() => {
             player.autoModeTimerId = undefined;
+            // [FIX] Cek ulang isPaused di sini juga — pause bisa terjadi SETELAH timer 3 detik ini
+            // mulai berjalan tapi SEBELUM ia meledak. Tanpa recheck ini, aksi otomatis (main
+            // kartu/draw/force-pick) tetap bisa lolos walau host sudah menjeda pertandingan.
+            if (this.gs.isPaused) { this.runAutoAction(player); return; }
             if (!player.autoMode || player.hasPlayed || player.winner || this.gs.gameOver) return;
             if (this.gs.phase === 1 && this.gs.phase1Player === player.id && !player.hasPlayed) {
                 if (player.hand.length > 0) {
@@ -3198,7 +3218,7 @@ class MatchmakingQueue {
                 nextHumanSlot++;
             }
         }
-        Object.entries(room.botSlots).forEach(([pos, b]) => { slots.push({ slot: parseInt(pos), name: `Bot Lv${b.level}`, level: b.level, isBot: true, uid: null }); });
+        Object.entries(room.botSlots).forEach(([pos, b]) => { slots.push({ slot: parseInt(pos), name: `Bot ${pos} Level ${b.level} (${getCustomBotLevelLabel(b.level)})`, level: b.level, isBot: true, uid: null }); });
         const msg = JSON.stringify({ type: 'CUSTOM_ROOM_UPDATE', roomId, slots, totalSlots: slots.length, hostRole: room.hostRole, hostUid: room.hostUid });
         room.players.forEach(p => { if (p.socket.readyState === WebSocket.OPEN) { try { p.socket.send(msg); } catch(_) {} } });
         if (room.spectatorSocket?.readyState === WebSocket.OPEN) { try { room.spectatorSocket.send(msg); } catch(_) {} }
@@ -3248,10 +3268,12 @@ class MatchmakingQueue {
             gameEngine.setSelectedProvinces(selectedProvinces);
             room.players.forEach(p => gameEngine.addPlayer({ id: p.id, name: p.name, isBot: false, socket: p.socket, userUid: p.userUid }));
             const customBotNames = [];
-            Object.values(room.botSlots).forEach(b => {
-                const bName = `Bot Lv${b.level}`;
+            // [FIX] Nama bot in-game dibuat SAMA PERSIS dengan teks di lobi ("Bot {slot} Level {level} (label)")
+            // supaya pemain tidak bingung — nama tidak berubah saat masuk dari lobi ke pertandingan.
+            Object.entries(room.botSlots).forEach(([pos, b]) => {
+                const bName = `Bot ${pos} Level ${b.level} (${getCustomBotLevelLabel(b.level)})`;
                 gameEngine.addBot(bName, b.level);
-                customBotNames.push(`${bName} (Level ${b.level})`);
+                customBotNames.push(bName);
             });
             if (customBotNames.length > 0) {
                 console.log(`🤖 BOT CUSTOM ROOM — Room: ${roomId}`);
