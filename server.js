@@ -1389,6 +1389,16 @@ class GameEngine {
         // Kalau semua peserta sudah memilih, langsung selesaikan tanpa menunggu sisa waktu 10 detik
         if (Object.keys(this.gs.votingChoices).length >= this.gs.votingParticipants.length) {
             if (this._votingTimer) { clearTimeout(this._votingTimer); this._votingTimer = null; }
+            // [FIX] Kalau sedang dijeda, JANGAN langsung finalize/reveal hasil voting — tunggu resume
+            // dulu (cek ulang tiap 1 detik). Sebelumnya reveal tetap jalan meski status "dijeda".
+            if (this.gs.isPaused) {
+                const _waitResumeThenFinalize = () => {
+                    if (this.gs.isPaused) { setTimeout(_waitResumeThenFinalize, 1000); return; }
+                    this.finalizeVotingRound();
+                };
+                _waitResumeThenFinalize();
+                return;
+            }
             this.finalizeVotingRound();
         }
     }
@@ -1458,8 +1468,18 @@ class GameEngine {
 
         const phase1Player = this.gs.players.find(p => p.id === playerId);
         if (!phase1Player || phase1Player.winner || phase1Player.leftMatch) {
-            // Safety net — pemenang voting ternyata sudah tidak valid (race condition sangat jarang)
-            this.systemPlayPhase1();
+            // [FIX] Sebelumnya di sini langsung fallback ke systemPlayPhase1() (ambil kartu acak,
+            // tanpa memberi hak ke siapapun) — tidak konsisten dengan skenario "menyerah SETELAH
+            // pegang hak" yang sudah benar melakukan voting ulang (lihat handleSurrender()).
+            // Sekarang: kalau masih ada pemain aktif tersisa, voting ULANG di antara mereka dulu;
+            // systemPlayPhase1() cuma dipakai sebagai jaring pengaman terakhir kalau sudah tidak
+            // ada satupun pemain aktif tersisa (mis. semua sudah menang/keluar).
+            const eligible = this.getActivePlayers().filter(p => !p.leftMatch);
+            if (eligible.length > 0) {
+                this.startPhase1Voting();
+            } else {
+                this.systemPlayPhase1();
+            }
             return;
         }
         this.assignPhase1Player(phase1Player);
