@@ -1366,11 +1366,20 @@ class GameEngine {
         this.broadcastGameState();
 
         // Bot langsung memilih otomatis & acak, dengan delay natural (biar tidak instan mencurigakan)
+        const _votingRoundTokenForBots = this.gs.votingRoundNum;
         participantIds.forEach(id => {
             const p = this.gs.players.find(pp => pp.id === id);
             if (p && p.isBot) {
                 const delay = 1000 + Math.floor(Math.random() * 3000); // jeda acak 1-4 detik
-                setTimeout(() => this.recordVoteChoice(id, this.randomVoteChoice(mode)), delay);
+                const _doBotVote = () => {
+                    // [FIX] recordVoteChoice() sekarang menolak total selama dijeda (bukan cuma
+                    // menahan reveal) — jadi timer bot ini WAJIB coba lagi sendiri saat resume,
+                    // kalau tidak bot itu jadi tidak pernah memilih sama sekali.
+                    if (this.gs.isPaused) { setTimeout(_doBotVote, 1000); return; }
+                    if (!this.gs.votingActive || this.gs.votingRoundNum !== _votingRoundTokenForBots) return; // ronde sudah lewat
+                    this.recordVoteChoice(id, this.randomVoteChoice(mode));
+                };
+                setTimeout(_doBotVote, delay);
             }
         });
 
@@ -1398,12 +1407,14 @@ class GameEngine {
     // Dipanggil dari message handler saat client kirim { type:'VOTE_CHOICE', choice }
     handleVoteChoice(playerId, choice) {
         if (!this.gs.votingActive) return;
+        if (this.gs.isPaused) return; // [FIX] jangan terima klik vote pemain manusia selama dijeda
         if (!this.gs.votingParticipants.includes(playerId)) return;
         this.recordVoteChoice(playerId, choice);
     }
 
     recordVoteChoice(playerId, choice) {
         if (!this.gs.votingActive) return;
+        if (this.gs.isPaused) return; // [FIX] jangan rekam pilihan sama sekali selama dijeda (bot pakai retry sendiri, lihat runVotingRound)
         if (this.gs.votingChoices[playerId]) return; // sudah memilih, tidak boleh ganti pilihan
         const validChoices = this.gs.votingMode === 'suit' ? ['batu', 'gunting', 'kertas'] : ['putih', 'hitam'];
         if (!validChoices.includes(choice)) return;
@@ -1859,6 +1870,7 @@ class GameEngine {
 
     // Bot yang punya kartu cocok langsung jatuhkan kartu terbaik
     botPlayMatchingCard(bot) {
+        if (this.gs.isPaused) { setTimeout(() => this.botPlayMatchingCard(bot), 1000); return; } // [FIX] jangan main kartu saat dijeda
         if (bot.hasPlayed || bot.mustDraw) return;
         const matching = bot.hand.filter(c => c.province === this.gs.currentProvince);
         if (matching.length === 0) return;
@@ -1928,6 +1940,7 @@ class GameEngine {
 
     // Bot melakukan draw dalam mode simultan (terus draw sampai dapat kartu cocok atau pile habis)
     botDrawSimultaneous(bot) {
+        if (this.gs.isPaused) { setTimeout(() => this.botDrawSimultaneous(bot), 1000); return; } // [FIX] jangan draw saat dijeda
         if (bot.hasPlayed || bot.winner || this.gs.gameOver) return;
         const drewOk = this.dealCard(bot);
         if (!drewOk) {
@@ -2065,7 +2078,9 @@ class GameEngine {
         // Bot ambil kartu BERSAMAAN dengan player, delay acak 2-6 detik biar natural (tidak ketahuan bot)
         botMustPick.forEach((bot, idx) => {
             const randomDelay = 1500 + Math.floor(Math.random() * 1500) + idx * 500;
-            setTimeout(() => {
+            const _doBotForcePick = () => {
+                // [FIX] Jangan biarkan bot ambil kartu paksa selama match dijeda — tunggu resume dulu.
+                if (this.gs.isPaused) { setTimeout(_doBotForcePick, 1000); return; }
                 if (bot.hasPlayed || bot.winner || this.gs.gameOver) return;
                 if (this.gs.topCard.length === 0) return;
                 const level = bot.botLevel ?? 1;
@@ -2104,7 +2119,8 @@ class GameEngine {
                         setTimeout(() => { this.gs.isHandlingForcePick = false; if (!this.gs.isEndingRound) this.endRound(); }, 500);
                     }
                 }
-            }, randomDelay);
+            };
+            setTimeout(_doBotForcePick, randomDelay);
         });
 
         // Tidak ada human dan tidak ada bot, langsung endRound
