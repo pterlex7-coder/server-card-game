@@ -942,8 +942,31 @@ class GameEngine {
         if (requestingUserUid !== this.hostUserUid) return { success: false, error: 'Hanya host yang dapat pause pertandingan.' };
         if (this.gs.gameOver) return { success: false, error: 'Pertandingan sudah selesai.' };
         this.gs.isPaused = !this.gs.isPaused;
+        this.gs.pausedBy = this.gs.isPaused ? 'host' : null; // [FIX] catat siapa yang menjeda, hindari tabrakan dgn pause voting
         const action = this.gs.isPaused ? 'PAUSED' : 'RESUMED';
         this.broadcastLog(`${this.gs.isPaused ? '⏸️' : '▶️'} Pertandingan di${this.gs.isPaused ? 'jeda' : 'lanjutkan'} oleh host.`);
+        this.broadcastToAll({ type: 'GAME_PAUSE_STATE', isPaused: this.gs.isPaused, action });
+        this.broadcastGameState();
+        return { success: true, isPaused: this.gs.isPaused };
+    }
+
+    // ── PAUSE/RESUME VOTING (semua spectator, bukan cuma host — HANYA saat voting Tahap 1 aktif) ──
+    // Beda dari handlePause(): tidak dibatasi ke host, tapi cuma boleh dipakai selama gs.votingActive
+    // true. Memakai flag gs.isPaused yang sama supaya semua guard pause yang sudah ada (endRound,
+    // startPhase1/2, PLAY_CARD, dll) otomatis ikut berlaku.
+    handleVotingPause(requestingUserUid) {
+        if (!this.spectatorUserUids.includes(requestingUserUid)) return { success: false, error: 'Hanya penonton yang dapat menjeda voting.' };
+        if (!this.gs.votingActive) return { success: false, error: 'Jeda hanya tersedia selama voting Tahap 1 berlangsung.' };
+        if (this.gs.gameOver) return { success: false, error: 'Pertandingan sudah selesai.' };
+        // [FIX] Kalau match sedang dijeda OLEH HOST, jangan biarkan tombol voting ini
+        // ikut me-resume-nya (dulu keduanya berbagi 1 toggle boolean tanpa pembeda pengirim).
+        if (this.gs.isPaused && this.gs.pausedBy === 'host') {
+            return { success: false, error: 'Match sedang dijeda oleh host, tunggu host melanjutkan.' };
+        }
+        this.gs.isPaused = !this.gs.isPaused;
+        this.gs.pausedBy = this.gs.isPaused ? 'voting' : null;
+        const action = this.gs.isPaused ? 'PAUSED' : 'RESUMED';
+        this.broadcastLog(`${this.gs.isPaused ? '⏸️' : '▶️'} Voting di${this.gs.isPaused ? 'jeda' : 'lanjutkan'} oleh penonton.`);
         this.broadcastToAll({ type: 'GAME_PAUSE_STATE', isPaused: this.gs.isPaused, action });
         this.broadcastGameState();
         return { success: true, isPaused: this.gs.isPaused };
@@ -1018,6 +1041,7 @@ class GameEngine {
     checkWin(player) {
         if (player.hand.length === 0 && !player.winner) {
             player.winner = true;
+            player.autoMode = false; // [FIX] indikator "Mode Otomatis" harus hilang begitu kartu pemain habis (menang)
             const takenRanks = new Set(this.gs.winners.map(w => w.rank));
             let rank = 1;
             while (takenRanks.has(rank)) rank++;
@@ -2272,6 +2296,8 @@ class GameEngine {
         while (worstRank > 0 && takenRanks.has(worstRank)) worstRank--;
         player.rank = worstRank > 0 ? worstRank : totalPlayers;
         player.winner = true;
+        player.surrendered = true; // [FIX] tandai eksplisit "menyerah" agar client bisa pakai emoji 💀, bukan medali
+        player.autoMode = false; // [FIX] indikator "Mode Otomatis" harus hilang juga saat pemain menyerah
         this.gs.winners.push(player);
         if (player.userUid && player.userUid !== "BOT" && !this.isCustomRoom) {
             player.statsSaved = true;
@@ -2324,6 +2350,19 @@ class GameEngine {
         this.gs.roundHistory.push({ round: this.gs.round, plays: [...this.gs.currentRoundPlays] });
         this.broadcastLog(`🏁 Ronde ${this.gs.round} selesai`);
         setTimeout(() => {
+            // [FIX PAUSE] Kalau sedang dijeda, JANGAN hapus/animasikan top card & JANGAN
+            // ganti ronde dulu — tunggu sampai host menekan "Lanjutkan". Cek ulang tiap 1 detik.
+            const _waitResumeThenEndRound = () => {
+                if (this.gs.isPaused) { setTimeout(_waitResumeThenEndRound, 1000); return; }
+                this._finishEndRoundTransition();
+            };
+            _waitResumeThenEndRound();
+        }, 1500);
+    }
+
+    // Bagian transisi akhir ronde (hapus top card, cek pemenang, mulai ronde berikutnya).
+    // Dipisah dari endRound() supaya bisa ditunda kalau match sedang dijeda (lihat _waitResumeThenEndRound).
+    _finishEndRoundTransition() {
             this.gs.discardPile.push(...this.gs.topCard);
             this.gs.topCard = []; this.gs.currentProvince = null;
             this.gs.forcePickMode = false; this.gs.forcePickPlayers = [];
@@ -2381,7 +2420,6 @@ class GameEngine {
                 this.gs.isEndingRound = false; this.gs.isHandlingForcePick = false;
                 this.gs.forcePickProcessing = false; this.startPhase1();
             }, 1500);
-        }, 1500);
     }
 
     endGame() {
@@ -2410,7 +2448,7 @@ class GameEngine {
         this.gs.players.filter(p => p.rank === 0).forEach(p => { p.rank = ++safeMax; });
         this.broadcastToAll({
             type: 'GAME_OVER',
-            players: this.gs.players.map(p => ({ id: p.id, name: p.name, rank: p.rank, hand: p.hand, isBot: p.isBot })),
+            players: this.gs.players.map(p => ({ id: p.id, name: p.name, rank: p.rank, hand: p.hand, isBot: p.isBot, surrendered: p.surrendered ?? false })),
             isCustomRoom: this.isCustomRoom
         });
         saveProvinceStats(this.selectedProvinces, this.gs.players, this.roomId, this.isCustomRoom);
@@ -2512,7 +2550,8 @@ class GameEngine {
                 drawLevel: p.drawLevel ?? 1, drawCount: p.drawCount ?? 0,
                 mustPlayMatching: p.mustPlayMatching ?? false,
                 drawProb: p.drawProb ?? 0,
-                drawOnceNoMatch: p.drawOnceNoMatch ?? false
+                drawOnceNoMatch: p.drawOnceNoMatch ?? false,
+                surrendered: p.surrendered ?? false
             })),
             roundHistory: this.gs.roundHistory.slice(-10),
             winners: this.gs.winners.map(p => ({ id: p.id, name: p.name, rank: p.rank })),
@@ -2568,6 +2607,7 @@ class GameEngine {
     botSendSticker(bot, stickerId) {
         if (!bot || !bot.isBot) return;
         if (this.isCustomRoom) return; // tidak berlaku di mode Tantang/Custom Match
+        if (this.gs.round <= 1) return; // [FIX] bot baru boleh kirim stiker setelah Ronde 1 selesai (mulai Ronde 2)
         if (!STICKER_IDS.has(stickerId)) return;
         const now = Date.now();
         if (bot.lastStickerAt && (now - bot.lastStickerAt) < STICKER_COOLDOWN_MS) return;
@@ -3568,6 +3608,21 @@ wss.on('connection', (socket) => {
                     break;
                 }
 
+                // [FITUR BARU] Pause/resume voting Tahap 1 — bisa dipakai SEMUA spectator (bukan cuma host),
+                // tapi HANYA berlaku selama voting sedang berlangsung (gs.votingActive).
+                case 'PAUSE_VOTING': {
+                    if (isCustomRoomSpectator && currentCustomRoomId && data.userUid) {
+                        const room = matchmaking.getRoom(currentCustomRoomId);
+                        if (room && room.gameEngine.isCustomRoom) {
+                            const res = room.gameEngine.handleVotingPause(data.userUid);
+                            if (!res.success) { try { socket.send(JSON.stringify({ type: 'ERROR', message: res.error })); } catch(_) {} }
+                        }
+                    } else {
+                        try { socket.send(JSON.stringify({ type: 'ERROR', message: 'Hanya penonton yang dapat menjeda voting.' })); } catch(_) {}
+                    }
+                    break;
+                }
+
                 case 'SET_AUTO_MODE':
                     if (currentPlayer && data.roomId) {
                         const room = matchmaking.getRoom(data.roomId);
@@ -3655,7 +3710,7 @@ wss.on('connection', (socket) => {
                                 const gp = finishedRoom.gameEngine.getPlayerById(data.playerId);
                                 const uidOk = gp && (!gp.userUid || gp.userUid === (data.userUid || ''));
                                 if (uidOk) {
-                                    try { socket.send(JSON.stringify({ type: 'GAME_OVER', players: finishedRoom.gameEngine.gs.players.map(p => ({ id: p.id, name: p.name, rank: p.rank, hand: p.hand, isBot: p.isBot })), isCustomRoom: finishedRoom.gameEngine.isCustomRoom })); } catch(_) {}
+                                    try { socket.send(JSON.stringify({ type: 'GAME_OVER', players: finishedRoom.gameEngine.gs.players.map(p => ({ id: p.id, name: p.name, rank: p.rank, hand: p.hand, isBot: p.isBot, surrendered: p.surrendered ?? false })), isCustomRoom: finishedRoom.gameEngine.isCustomRoom })); } catch(_) {}
                                     if (gp && gp.rank > 0) { try { socket.send(JSON.stringify({ type: 'SAVE_STATS_CLIENT', rank: gp.rank })); } catch (_) {} }
                                 } else { try { socket.send(JSON.stringify({ type: 'ERROR', message: 'Akun tidak cocok.' })); } catch(_) {} }
                             } else { try { socket.send(JSON.stringify({ type: 'ERROR', message: 'Room tidak ditemukan atau sudah berakhir.' })); } catch(_) {} }
@@ -3683,7 +3738,7 @@ wss.on('connection', (socket) => {
                             // kirim GAME_OVER agar spectator bisa lihat hasil akhir, bukan ERROR.
                             const finishedRoom = matchmaking.getRoom(data.roomId);
                             if (finishedRoom) {
-                                try { socket.send(JSON.stringify({ type: 'GAME_OVER', players: finishedRoom.gameEngine.gs.players.map(p => ({ id: p.id, name: p.name, rank: p.rank, hand: p.hand, isBot: p.isBot })), isCustomRoom: finishedRoom.gameEngine.isCustomRoom, isSpectator: true })); } catch(_) {}
+                                try { socket.send(JSON.stringify({ type: 'GAME_OVER', players: finishedRoom.gameEngine.gs.players.map(p => ({ id: p.id, name: p.name, rank: p.rank, hand: p.hand, isBot: p.isBot, surrendered: p.surrendered ?? false })), isCustomRoom: finishedRoom.gameEngine.isCustomRoom, isSpectator: true })); } catch(_) {}
                             } else {
                                 try { socket.send(JSON.stringify({ type: 'ERROR', message: 'Pertandingan telah berakhir.' })); } catch(_) {}
                             }
