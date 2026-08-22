@@ -943,11 +943,26 @@ class GameEngine {
         if (this.gs.gameOver) return { success: false, error: 'Pertandingan sudah selesai.' };
         this.gs.isPaused = !this.gs.isPaused;
         this.gs.pausedBy = this.gs.isPaused ? 'host' : null; // [FIX] catat siapa yang menjeda, hindari tabrakan dgn pause voting
+        this._syncVotingDeadlineOnPauseToggle(); // [FIX] geser deadline voting kalau sedang berlangsung
         const action = this.gs.isPaused ? 'PAUSED' : 'RESUMED';
         this.broadcastLog(`${this.gs.isPaused ? '⏸️' : '▶️'} Pertandingan di${this.gs.isPaused ? 'jeda' : 'lanjutkan'} oleh host.`);
         this.broadcastToAll({ type: 'GAME_PAUSE_STATE', isPaused: this.gs.isPaused, action });
         this.broadcastGameState();
         return { success: true, isPaused: this.gs.isPaused };
+    }
+
+    // Dipakai handlePause() & handleVotingPause(): kalau voting Tahap 1 sedang berlangsung saat
+    // status pause berubah, geser this.gs.votingDeadline sebesar durasi jeda — supaya "sisa waktu"
+    // voting benar-benar berhenti selama dijeda (bukan cuma tampilannya doang di client), dan begitu
+    // resume, sisa waktunya persis sama seperti sebelum dijeda alih-alih langsung auto-finalize.
+    _syncVotingDeadlineOnPauseToggle() {
+        if (!this.gs.votingActive) return;
+        if (this.gs.isPaused) {
+            this.gs.votingPausedAt = Date.now();
+        } else if (this.gs.votingPausedAt) {
+            this.gs.votingDeadline += (Date.now() - this.gs.votingPausedAt);
+            this.gs.votingPausedAt = null;
+        }
     }
 
     // ── PAUSE/RESUME VOTING (semua spectator, bukan cuma host — HANYA saat voting Tahap 1 aktif) ──
@@ -965,6 +980,7 @@ class GameEngine {
         }
         this.gs.isPaused = !this.gs.isPaused;
         this.gs.pausedBy = this.gs.isPaused ? 'voting' : null;
+        this._syncVotingDeadlineOnPauseToggle(); // [FIX] geser deadline voting sebesar durasi jeda
         const action = this.gs.isPaused ? 'PAUSED' : 'RESUMED';
         this.broadcastLog(`${this.gs.isPaused ? '⏸️' : '▶️'} Voting di${this.gs.isPaused ? 'jeda' : 'lanjutkan'} oleh penonton.`);
         this.broadcastToAll({ type: 'GAME_PAUSE_STATE', isPaused: this.gs.isPaused, action });
@@ -1324,6 +1340,12 @@ class GameEngine {
         this.gs.votingMode = mode;
         this.gs.votingParticipants = participantIds;
         this.gs.votingChoices = {};
+        // [FIX] Simpan deadline eksplisit (bukan cuma delay 10000ms sekali jalan) supaya bisa
+        // digeser saat pause/resume — lihat handlePause()/handleVotingPause() yang menggeser
+        // this.gs.votingDeadline sebesar durasi jeda, dan checkVotingTimeout() di bawah yang
+        // membaca ulang sisa waktu dari deadline ini (bukan dari timer 10 detik yang kaku).
+        this.gs.votingDeadline = Date.now() + 10000;
+        this.gs.votingPausedAt = null;
 
         const names = participantIds.map(id => this.gs.players.find(p => p.id === id)?.name).filter(Boolean);
         this.broadcastLog(mode === 'suit'
@@ -1353,14 +1375,18 @@ class GameEngine {
         });
 
         // Batas waktu voting: 10 detik. Token ronde mencegah timer basi (stale) menembak ronde berikutnya.
+        // [FIX] Sekarang membaca sisa waktu dari this.gs.votingDeadline (bisa digeser saat pause/resume)
+        // alih-alih delay 10000ms yang kaku dan tidak tahu-menahu soal jeda.
         if (this._votingTimer) clearTimeout(this._votingTimer);
         const thisRoundToken = this.gs.votingRoundNum;
         const checkVotingTimeout = () => {
             if (!this.gs.votingActive || this.gs.votingRoundNum !== thisRoundToken) return;
-            if (this.gs.isPaused) { this._votingTimer = setTimeout(checkVotingTimeout, 1000); return; } // tunggu resume
-            this.finalizeVotingRound();
+            if (this.gs.isPaused) { this._votingTimer = setTimeout(checkVotingTimeout, 500); return; } // tunggu resume
+            const remainMs = this.gs.votingDeadline - Date.now();
+            if (remainMs <= 0) { this.finalizeVotingRound(); return; }
+            this._votingTimer = setTimeout(checkVotingTimeout, Math.min(remainMs, 1000));
         };
-        this._votingTimer = setTimeout(checkVotingTimeout, 10000);
+        this._votingTimer = setTimeout(checkVotingTimeout, 1000);
     }
 
     randomVoteChoice(mode) {
