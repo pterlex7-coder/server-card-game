@@ -1372,12 +1372,18 @@ class GameEngine {
         });
         this.broadcastGameState();
 
-        // Bot langsung memilih otomatis & acak, dengan delay natural (biar tidak instan mencurigakan)
+        // Bot langsung memilih otomatis & acak. Di mode Ranked, delay dibuat ACAK supaya
+        // terasa natural/tersamarkan seolah-olah player asli. Di mode Tantang, penyamaran
+        // tidak relevan (pemain sendiri yang masukin bot), jadi delay dibuat TETAP
+        // (bukan acak) — cuma dijeda bertahap per bot biar tidak numpuk di log/UI.
         const _votingRoundTokenForBots = this.gs.votingRoundNum;
+        let _votingBotIdx = 0;
         participantIds.forEach(id => {
             const p = this.gs.players.find(pp => pp.id === id);
             if (p && p.isBot) {
-                const delay = 1000 + Math.floor(Math.random() * 3000); // jeda acak 1-4 detik
+                const delay = this.isCustomRoom
+                    ? 500 + (_votingBotIdx++) * 500   // Tantang: tetap, jeda 0.5 detik per bot
+                    : 1000 + Math.floor(Math.random() * 3000); // Ranked: acak 1-4 detik (samarkan)
                 const _doBotVote = () => {
                     // [FIX] recordVoteChoice() sekarang menolak total selama dijeda (bukan cuma
                     // menahan reveal) — jadi timer bot ini WAJIB coba lagi sendiri saat resume,
@@ -2062,7 +2068,14 @@ class GameEngine {
 
         this.gs.drawTurnIndex = 0;
         this.gs.isProcessingDrawTurn = true;
-        this.broadcastLog(`🔄 Sistem Ambil Kartu Bergiliran dimulai! Urutan: ${this.gs.drawTurnQueue.map(p => p.name).join(' → ')}`);
+        // [FIX] Log urutan giliran ini cuma menggambarkan simulasi internal delay bot —
+        // pemain asli TIDAK pernah benar-benar menunggu giliran (mereka bisa langsung pilih
+        // begitu mustForcePick aktif). Menampilkan "Urutan: ..." di mode Ranked bisa
+        // menimbulkan kejanggalan/kecurigaan karena tidak sesuai yang dirasakan pemain.
+        // Di mode Tantang tetap ditampilkan karena memang sengaja transparan soal bot.
+        if (this.isCustomRoom) {
+            this.broadcastLog(`🔄 Sistem Ambil Kartu Bergiliran dimulai! Urutan: ${this.gs.drawTurnQueue.map(p => p.name).join(' → ')}`);
+        }
         this.processForcePick(this.gs.drawTurnQueue, []);
     }
 
@@ -2082,9 +2095,13 @@ class GameEngine {
             });
         }
 
-        // Bot ambil kartu BERSAMAAN dengan player, delay acak 2-6 detik biar natural (tidak ketahuan bot)
+        // Bot ambil kartu BERSAMAAN dengan player. Di mode Ranked, delay ACAK biar terasa
+        // natural/tersamarkan seolah-olah player asli. Di mode Tantang, penyamaran tidak
+        // relevan, jadi delay dibuat TETAP (bukan acak) — cuma dijeda bertahap per bot.
         botMustPick.forEach((bot, idx) => {
-            const randomDelay = 1500 + Math.floor(Math.random() * 1500) + idx * 500;
+            const randomDelay = this.isCustomRoom
+                ? 2000 + idx * 500                                        // Tantang: tetap, tanpa acak
+                : 1500 + Math.floor(Math.random() * 1500) + idx * 500;    // Ranked: acak (samarkan)
             const _doBotForcePick = () => {
                 // [FIX] Jangan biarkan bot ambil kartu paksa selama match dijeda — tunggu resume dulu.
                 if (this.gs.isPaused) { setTimeout(_doBotForcePick, 1000); return; }
@@ -3268,10 +3285,10 @@ class MatchmakingQueue {
             gameEngine.setSelectedProvinces(selectedProvinces);
             room.players.forEach(p => gameEngine.addPlayer({ id: p.id, name: p.name, isBot: false, socket: p.socket, userUid: p.userUid }));
             const customBotNames = [];
-            // [FIX] Nama bot in-game dibuat SAMA PERSIS dengan teks di lobi ("Bot {slot} Level {level} (label)")
-            // supaya pemain tidak bingung — nama tidak berubah saat masuk dari lobi ke pertandingan.
+            // [FIX] Nama bot IN-GAME (dalam pertandingan) dibuat lebih ringkas: "Bot {slot} Level {level}"
+            // tanpa label kesulitan (Mudah/Normal/Sulit) — label itu cukup ditampilkan di lobi saja.
             Object.entries(room.botSlots).forEach(([pos, b]) => {
-                const bName = `Bot ${pos} Level ${b.level} (${getCustomBotLevelLabel(b.level)})`;
+                const bName = `Bot ${pos} Level ${b.level}`;
                 gameEngine.addBot(bName, b.level);
                 customBotNames.push(bName);
             });
