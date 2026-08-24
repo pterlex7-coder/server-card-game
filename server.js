@@ -1655,7 +1655,43 @@ class GameEngine {
                 ? [...bot.hand].filter(c => c.power > topCard3.power).sort((a, b) => a.power - b.power)[0]
                 : null;
 
-            // ── PRIORITAS 2: Force Draw (dicek setiap saat) ──
+            // ── PRIORITAS 2: Pancingan ──
+            // Kalau SEMUA kartu lawan di suatu provinsi punya power >= 8 (tidak ada kartu kecil
+            // buat dia "kabur"/dodge), bot jatuhkan kartu TERKECIL miliknya dari provinsi yang
+            // sama. Lawan dijamin terpaksa korbankan MINIMAL kartu terkecilnya di antara pilihan
+            // yang tersisa (belum tentu kartu terbesarnya — dia tetap boleh pilih yang paling
+            // kecil di antara yang >=8 itu). Berlaku baik lawan punya 1 kartu maupun banyak kartu
+            // di provinsi itu, selama tidak ada satupun yang <8 (kalau ada, lawan bisa dodge pakai itu).
+            let baitCard3 = null;
+            if (!blockCard3) {
+                const botProvinces3 = [...new Set(bot.hand.map(c => c.province))];
+                let bestBait3 = null; // simpan kandidat dengan selisih power (gain) terbesar
+                botProvinces3.forEach(prov => {
+                    const botCardsInProv3 = bot.hand.filter(c => c.province === prov);
+                    const botSmallestInProv3 = [...botCardsInProv3].sort((a, b) => a.power - b.power)[0];
+                    opponents3.forEach(opp => {
+                        // [FIX KRITIS] JANGAN PERNAH mancing lawan yang tinggal 1 kartu di tangan —
+                        // Block Win cuma aktif saat 1v1 ketat, tapi bahaya "lawan menang kalau
+                        // kartu terakhirnya dipaksa keluar" berlaku di SEMUA jumlah pemain (2, 3, 4+).
+                        // Tanpa pengecualian ini, Pancingan bisa tidak sengaja memaksa lawan yang
+                        // hampir menang untuk benar-benar menang (bertolak belakang dengan tujuannya).
+                        if (opp.hand.length === 1) return;
+                        const oppCardsInProv3 = opp.hand.filter(c => c.province === prov);
+                        if (oppCardsInProv3.length === 0) return; // lawan tidak punya kartu di provinsi ini
+                        const oppMinPowerInProv3 = Math.min(...oppCardsInProv3.map(c => c.power));
+                        if (oppMinPowerInProv3 < 8) return; // ada kartu kecil buat lawan dodge, jangan mancing
+                        if (oppMinPowerInProv3 > botSmallestInProv3.power) {
+                            const gain3 = oppMinPowerInProv3 - botSmallestInProv3.power;
+                            if (!bestBait3 || gain3 > bestBait3.gain) {
+                                bestBait3 = { card: botSmallestInProv3, gain: gain3 };
+                            }
+                        }
+                    });
+                });
+                if (bestBait3) baitCard3 = bestBait3.card;
+            }
+
+            // ── PRIORITAS 3: Force Draw (dicek setiap saat) ──
             // Utamakan kartu uncommon/common dari provinsi yang tidak dimiliki lawan.
             // Jika tidak ada uncommon/common unik, boleh pakai kartu lain HANYA JIKA
             // kartu terkecil bot memang bukan uncommon/common (misal terkecilnya epic).
@@ -1672,7 +1708,7 @@ class GameEngine {
             const skipForceDrawFinal3  = skipForceDraw3 || botHandCount3 <= 2 || botCanWinRound3;
 
             let forceDrawCard3 = null;
-            if (!blockCard3 && !skipForceDrawFinal3) {
+            if (!blockCard3 && !baitCard3 && !skipForceDrawFinal3) {
                 const ucRarities3  = new Set(['common','commonplus','uncommonplus','uncommon']);
                 // Kandidat: kartu yang provinsinya tidak dimiliki lawan (semua rarity)
                 const uniqueCands3 = bot.hand.filter(c => !allOppProvinces3.has(c.province));
@@ -1694,7 +1730,7 @@ class GameEngine {
                 }
             }
 
-            // ── PRIORITAS 3: Solo Province (hanya saat draw pile habis) ──
+            // ── PRIORITAS 4: Solo Province (hanya saat draw pile habis) ──
             // Jika tidak ada lawan yang punya kartu dari provinsi yang sama dengan kartu bot,
             // jatuhkan kartu dari provinsi itu untuk memaksa lawan force pick dari top card.
             // SKIP jika:
@@ -1703,7 +1739,7 @@ class GameEngine {
             // Pilih kartu dengan power TERKECIL (utamakan common/uncommon),
             // boleh jatuhkan Mythic sampai Rare★ HANYA jika kartu itu memang power terkecil yang dimiliki.
             let soloProvinceCard3 = null;
-            if (!blockCard3 && dpIsEmpty3 && botHandCount3 > 3) {
+            if (!blockCard3 && !baitCard3 && dpIsEmpty3 && botHandCount3 > 3) {
                 const botProvincesOwned3 = new Set(bot.hand.map(c => c.province));
                 const soloProvinces3 = [...botProvincesOwned3].filter(prov => !allOppProvinces3.has(prov));
                 if (soloProvinces3.length > 0) {
@@ -1721,7 +1757,7 @@ class GameEngine {
                 }
             }
 
-            // ── PRIORITAS 4: Fallback sama dengan lv2 (terkecil-kedua aman) ──
+            // ── PRIORITAS 5: Fallback sama dengan lv2 (terkecil-kedua aman) ──
             const oneCardOpps3     = opponents3.filter(p => p.hand.length === 1);
             const dangerProvinces3 = new Set(oneCardOpps3.flatMap(p => p.hand.map(c => c.province)));
             const safeCards3       = dangerProvinces3.size > 0
@@ -1741,15 +1777,17 @@ class GameEngine {
 
             // ── Prioritas final ──
             const _usedBlock3      = !!blockCard3;
-            const _usedForceDraw3  = !_usedBlock3 && !!forceDrawCard3;
-            const _usedSoloProv3   = !_usedBlock3 && !_usedForceDraw3 && !!soloProvinceCard3;
+            const _usedBait3       = !_usedBlock3 && !!baitCard3;
+            const _usedForceDraw3  = !_usedBlock3 && !_usedBait3 && !!forceDrawCard3;
+            const _usedSoloProv3   = !_usedBlock3 && !_usedBait3 && !_usedForceDraw3 && !!soloProvinceCard3;
 
             card = _usedBlock3     ? blockCard3
+                 : _usedBait3      ? baitCard3
                  : _usedForceDraw3 ? forceDrawCard3
                  : _usedSoloProv3  ? soloProvinceCard3
                  : (secondWeakest3 ?? [...bot.hand].sort((a, b) => a.power - b.power)[0]);
 
-            bot._lv3flags = { usedBlock: _usedBlock3, usedForceDraw: _usedForceDraw3, usedSoloProv: _usedSoloProv3 };
+            bot._lv3flags = { usedBlock: _usedBlock3, usedBait: _usedBait3, usedForceDraw: _usedForceDraw3, usedSoloProv: _usedSoloProv3 };
         }
         this.gs.currentProvince = card.province;
         this.gs.topCard = [card];
@@ -1765,6 +1803,7 @@ class GameEngine {
             const flags   = bot._lv3flags ?? {};
             bot._lv3flags = undefined;
             if (flags.usedBlock)          strategyNote = ' [Lv3: block-win]';
+            else if (flags.usedBait)      strategyNote = ' [Lv3: pancingan]';
             else if (flags.usedForceDraw) strategyNote = ' [Lv3: force-draw-unik]';
             else if (flags.usedSoloProv)  strategyNote = ' [Lv3: solo-provinsi(dpHabis)]';
             else                          strategyNote = ' [Lv3: terkecil-kedua]';
