@@ -1659,21 +1659,46 @@ class GameEngine {
 
             const opponents3 = this.gs.players.filter(p => p.id !== bot.id && !p.winner);
 
+            // [FIX] Strategi ofensif (Pancingan, Force Draw, Solo Province) HANYA menyasar
+            // lawan yang BUKAN sesama Bot Level 3 — yaitu Bot Level 1/2 atau pemain asli.
+            // Kalau lawannya sesama Bot Level 3, jangan dijadikan target strategi menyerang
+            // (main defensif/apa adanya seperti Level 2 terhadap lawan sesama Level 3 itu).
+            // Block Win TETAP berlaku ke SEMUA lawan (termasuk sesama Lv3) karena itu bukan
+            // "menyerang" — mencegah siapapun menang itu wajib selalu aktif.
+            const attackableOpps3 = opponents3.filter(p => !(p.isBot && (p.botLevel ?? 1) === 3));
+
             // ── Pengecekan kondisi (dilakukan setiap saat) ──
-            const allOppProvinces3 = new Set(opponents3.flatMap(p => p.hand.map(c => c.province)));
+            const allOppProvinces3 = new Set(attackableOpps3.flatMap(p => p.hand.map(c => c.province)));
             const dpIsEmpty3       = this.gs.drawPile.length === 0;
-            // Skip force draw jika: draw pile kosong ATAU (SEMUA lawan drawLevel > 6 DAN stok rare-common habis)
-            const hasHighDrawOpp3  = opponents3.every(p => (p.drawLevel ?? 1) > 6);
+            // Skip force draw jika: draw pile kosong ATAU tidak ada lawan yang boleh diserang
+            // ATAU (SEMUA lawan yang boleh diserang drawLevel > 6 DAN stok rare-common habis)
+            // [FIX] attackableOpps3.length === 0 wajib dicek eksplisit — kalau tidak, .every()
+            // pada array kosong otomatis bernilai true (vacuous truth), bisa salah kesimpulan.
+            const hasHighDrawOpp3  = attackableOpps3.length > 0 && attackableOpps3.every(p => (p.drawLevel ?? 1) > 6);
             const lowRarities3     = new Set(['common','commonplus','uncommonplus','uncommon','rare','rarestar','rareplus']);
             const lowStockHabis3   = !this.gs.drawPile.some(c => lowRarities3.has(c.rarity));
-            const skipForceDraw3   = dpIsEmpty3 || (hasHighDrawOpp3 && lowStockHabis3);
+            const skipForceDraw3   = dpIsEmpty3 || attackableOpps3.length === 0 || (hasHighDrawOpp3 && lowStockHabis3);
 
-            // ── PRIORITAS 1: Block win (hanya aktif saat 1vs1 — lawan aktif tinggal 1 orang) ──
+            // ── PRIORITAS 1: Block win ──
+            // [FIX] Sebelumnya cuma aktif saat 1v1 ketat (opponents3.length === 1), jadi kalau
+            // ada 3+ pemain aktif, Block Win TIDAK PERNAH aktif walau ada lawan yang tinggal
+            // 1 kartu — celah ini bisa bikin Level 3 kalah dari Level 2 (yang blocknya sudah
+            // berlaku di jumlah pemain berapapun). Sekarang disamakan: cari SIAPAPUN lawan
+            // yang tinggal 1 kartu, tidak peduli total lawan aktif ada berapa.
+            // [FIX] Block Win cuma berlaku ke lawan yang boleh diserang (Bot Lv1/2 atau
+            // pemain asli) — sesama Bot Level 3 TIDAK diblokir, dibiarkan menang kalau bisa.
             const topCard3      = this.gs.topCard[0];
-            const isOneVsOne3   = opponents3.length === 1;
-            const nearWinOpp3   = (isOneVsOne3 && topCard3) ? opponents3.find(p => p.hand.length === 1) : null;
-            const blockCard3    = nearWinOpp3 && topCard3
-                ? [...bot.hand].filter(c => c.power > topCard3.power).sort((a, b) => a.power - b.power)[0]
+            const nearWinOpp3   = topCard3 ? attackableOpps3.find(p => p.hand.length === 1) : null;
+            // [FIX KRITIS] Logika lama cuma bandingkan power vs topCard3 (kartu leftover yang
+            // TIDAK terkait dengan kartu terakhir lawan), tanpa cek provinsi sama sekali. Karena
+            // checkWin() cuma peduli "kartu di tangan habis" (power tidak berpengaruh), main dari
+            // provinsi YANG SAMA dengan kartu terakhir lawan — walau power lebih besar — justru
+            // MENJAMIN lawan bisa matching dan menang, bukan memblokir!
+            // Blocking yang benar: hindari provinsi kartu terakhir lawan sepenuhnya, supaya lawan
+            // tidak bisa matching apapun (dipaksa draw/force-pick). Karena provinsi lain apapun
+            // powernya sudah otomatis "aman", langsung ambil yang power TERKECIL (paling irit).
+            const blockCard3    = nearWinOpp3
+                ? [...bot.hand].filter(c => c.province !== nearWinOpp3.hand[0].province).sort((a, b) => a.power - b.power)[0]
                 : null;
 
             // ── PRIORITAS 2: Pancingan ──
@@ -1690,13 +1715,17 @@ class GameEngine {
                 botProvinces3.forEach(prov => {
                     const botCardsInProv3 = bot.hand.filter(c => c.province === prov);
                     const botSmallestInProv3 = [...botCardsInProv3].sort((a, b) => a.power - b.power)[0];
-                    opponents3.forEach(opp => {
+                    // [FIX] Cuma lawan yang boleh diserang (bukan sesama Bot Level 3) yang
+                    // dijadikan target Pancingan.
+                    attackableOpps3.forEach(opp => {
                         // [FIX KRITIS] JANGAN PERNAH mancing lawan yang tinggal 1 kartu di tangan —
                         // Block Win cuma aktif saat 1v1 ketat, tapi bahaya "lawan menang kalau
                         // kartu terakhirnya dipaksa keluar" berlaku di SEMUA jumlah pemain (2, 3, 4+).
                         // Tanpa pengecualian ini, Pancingan bisa tidak sengaja memaksa lawan yang
                         // hampir menang untuk benar-benar menang (bertolak belakang dengan tujuannya).
-                        if (opp.hand.length === 1) return;
+                        // [FIX] Diperluas jadi <=4 kartu (bukan cuma tepat 1) — kalau kartu lawan
+                        // sudah tinggal sedikit (endgame), Pancingan di-skip sepenuhnya untuk lawan itu.
+                        if (opp.hand.length <= 4) return;
                         const oppCardsInProv3 = opp.hand.filter(c => c.province === prov);
                         if (oppCardsInProv3.length === 0) return; // lawan tidak punya kartu di provinsi ini
                         const oppMinPowerInProv3 = Math.min(...oppCardsInProv3.map(c => c.power));
@@ -1760,7 +1789,7 @@ class GameEngine {
             // Pilih kartu dengan power TERKECIL (utamakan common/uncommon),
             // boleh jatuhkan Mythic sampai Rare★ HANYA jika kartu itu memang power terkecil yang dimiliki.
             let soloProvinceCard3 = null;
-            if (!blockCard3 && !baitCard3 && dpIsEmpty3 && botHandCount3 > 3) {
+            if (!blockCard3 && !baitCard3 && dpIsEmpty3 && botHandCount3 > 3 && attackableOpps3.length > 0) {
                 const botProvincesOwned3 = new Set(bot.hand.map(c => c.province));
                 const soloProvinces3 = [...botProvincesOwned3].filter(prov => !allOppProvinces3.has(prov));
                 if (soloProvinces3.length > 0) {
@@ -1948,19 +1977,15 @@ class GameEngine {
         const matching = bot.hand.filter(c => c.province === this.gs.currentProvince);
         if (matching.length === 0) return;
         const level = bot.botLevel ?? 1;
-        // Block win untuk level 2 dan 3: jika lawan tinggal 1 kartu di tangan dan sudah jatuhkan kartu
-        // Lv3: hanya aktif saat 1vs1 (lawan aktif tinggal 1 orang)
-        const topCardNow = this.gs.topCard[this.gs.topCard.length - 1];
-        const activeOppsP2 = this.gs.players.filter(p => p.id !== bot.id && !p.winner);
-        const isOneVsOneP2 = activeOppsP2.length === 1;
-        const nearWinOppP2 = (level >= 2 && topCardNow && (level < 3 || isOneVsOneP2))
-            ? this.gs.players.find(p => p.id !== bot.id && !p.winner && p.hand.length === 1)
-            : null;
+        // [FIX] Logika "block win" versi Fase 2 (main kartu power lebih besar dari topCard)
+        // DIHAPUS — provinsi ronde ini SUDAH ditentukan duluan (bisa oleh pemain lain), jadi
+        // kalau lawan yang tinggal 1 kartu kebetulan punya kartu matching untuk provinsi ini,
+        // dia WAJIB mainkan (aturan wajib main kalau matching) dan otomatis menang — power
+        // kartu bot sama sekali tidak berpengaruh ke hasil itu (checkWin cuma cek kartu habis,
+        // bukan power). Blocking yang benar-benar efektif cuma bisa terjadi di Fase 1 (saat
+        // provinsi ronde masih bisa dipilih/dihindari), sudah ditangani di botPlayPhase1().
         let sorted;
-        if (nearWinOppP2 && topCardNow) {
-            const blockables = [...matching].filter(c => c.power > topCardNow.power).sort((a, b) => a.power - b.power);
-            sorted = blockables.length > 0 ? blockables : [...matching].sort((a, b) => a.power - b.power);
-                } else if (level >= 3) {
+        if (level >= 3) {
             // Lv3 Phase 2: jatuhkan kartu matching dengan power terkecil
             sorted = [...matching].sort((a, b) => a.power - b.power);
         } else {
