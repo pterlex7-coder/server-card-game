@@ -1188,7 +1188,15 @@ class GameEngine {
             chosen = pickByHighestRarity(matchingCards);
         } else {
             // ── TIDAK DAPAT KARTU SATU PROVINSI ──
-            const pool = nonMatchingCards.length > 0 ? nonMatchingCards : matchingCards;
+            const rawPool = nonMatchingCards.length > 0 ? nonMatchingCards : matchingCards;
+            // [FIX] 99.9% dari draw yang "tidak cocok" ini bakal utamakan provinsi yang BELUM
+            // ada di tangan PEMAIN/BOT INI SENDIRI (bukan pemain lain) — supaya kartu terus
+            // menyebar ke provinsi baru, tidak numpuk di provinsi yang sudah dipegang.
+            // Sisa 0.1% tetap boleh dapat provinsi yang sudah dipegang (elemen kejutan).
+            const ownedProvinces = new Set(player.hand.map(c => c.province));
+            const freshProvincePool = rawPool.filter(c => !ownedProvinces.has(c.province));
+            const useFreshProvince = freshProvincePool.length > 0 && Math.random() < 0.999;
+            const pool = useFreshProvince ? freshProvincePool : rawPool;
             // Prioritaskan rarity tertinggi dari pool non-matching sesuai level draw card
             chosen = pickByHighestRarity(pool);
         }
@@ -1241,14 +1249,26 @@ class GameEngine {
 
         this.gs.players.forEach(player => {
             const usedRarities = new Set(); // rarity yang sudah dipegang pemain ini
+            const usedProvinces = new Set(); // [FIX] provinsi yang sudah dipegang pemain ini — cegah 2 kartu dari provinsi yang sama
 
             for (const targetRarity of DEAL_RARITIES) {
                 // Ambil semua kartu di drawPile dengan rarity ini yang belum dimiliki pemain lain
-                const candidates = this.gs.drawPile.filter(c => c.rarity === targetRarity);
+                const candidatesAll = this.gs.drawPile.filter(c => c.rarity === targetRarity);
 
-                if (candidates.length === 0) {
+                if (candidatesAll.length === 0) {
                     console.error(`❌ startGame: tidak ada kartu rarity "${targetRarity}" tersisa untuk ${player.name}`);
                     continue;
+                }
+
+                // [FIX] Utamakan kartu dari provinsi yang BELUM dipegang pemain ini, supaya
+                // 8 kartu awal semuanya dari provinsi berbeda-beda (tidak ada yang dobel).
+                // Kalau ternyata semua kandidat rarity ini kebetulan dari provinsi yang sudah
+                // dipegang (jarang terjadi, biasanya karena provinsi yang dipilih sedikit),
+                // baru longgarkan aturan ini supaya pemain tetap dapat 8 kartu penuh.
+                const candidatesUniqueProv = candidatesAll.filter(c => !usedProvinces.has(c.province));
+                const candidates = candidatesUniqueProv.length > 0 ? candidatesUniqueProv : candidatesAll;
+                if (candidatesUniqueProv.length === 0) {
+                    console.warn(`⚠️ startGame: tidak ada kartu rarity "${targetRarity}" dari provinsi baru untuk ${player.name} — pakai provinsi yang sudah ada.`);
                 }
 
                 // Pilih acak dari kandidat yang ada
@@ -1256,6 +1276,7 @@ class GameEngine {
                 this.gs.drawPile.splice(this.gs.drawPile.indexOf(chosen), 1);
                 player.hand.push(chosen);
                 usedRarities.add(targetRarity);
+                usedProvinces.add(chosen.province);
                 this.updatePower(player);
             }
         });
