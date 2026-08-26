@@ -2545,6 +2545,15 @@ class GameEngine {
     _finishEndRoundTransition() {
             this.gs.discardPile.push(...this.gs.topCard);
             this.gs.topCard = []; this.gs.currentProvince = null;
+            // [FIX NAMA NYANGKUT] phase1Player TIDAK direset otomatis setelah pemain menjatuhkan
+            // kartu Tahap 1 secara normal (cuma direset ke null saat pemain menyerah). Kalau tidak
+            // di-null-kan di sini, broadcastGameState() di bawah ini akan mengirim currentProvince
+            // kosong TAPI phase1Player masih ID pemain/bot dari RONDE YANG BARU SAJA SELESAI —
+            // sehingga label "Menunggu ... Menjatuhkan Kartu Ke Arena..." di client sempat
+            // menampilkan nama pemain ronde lama, sebelum akhirnya diganti nama yang benar saat
+            // assignPhase1Player() jalan untuk ronde berikutnya. Reset ke null di sini membuat
+            // client jatuh ke fallback netral "Menunggu kartu..." selama jeda transisi tersebut.
+            this.gs.phase1Player = null;
             this.gs.forcePickMode = false; this.gs.forcePickPlayers = [];
             this.broadcastGameState();
             const activePlayers = this.getActivePlayers();
