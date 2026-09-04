@@ -2755,18 +2755,48 @@ class GameEngine {
         };
     }
 
-    broadcastGameState() {
+    // [FIX INFO LEAK] getFullState() mengirim kartu LENGKAP di tangan SEMUA pemain (termasuk
+    // lawan) ke setiap penerima — data ini bisa dibaca lewat DevTools/Network tab walau UI
+    // client sengaja tidak menampilkannya untuk lawan. Fungsi ini membuat salinan state yang
+    // disaring KHUSUS untuk satu penerima (recipientPlayerId): tangan miliknya sendiri tetap
+    // utuh, tapi tangan pemain LAIN (termasuk bot) diganti jadi placeholder buram — nama, tipe,
+    // rarity, power, provinsi disembunyikan, cuma jumlah kartunya (length) yang tetap sama
+    // supaya semua tampilan "X kartu tersisa" yang sudah ada tidak perlu diubah. Id asli diganti
+    // id buram yang STABIL per kartu fisik dalam sesi ini (di-cache di this._hiddenIdMap), supaya
+    // deteksi "kartu ini baru saja dimainkan" di client tetap berfungsi tanpa membocorkan
+    // identitas kartunya. TIDAK dipakai untuk penonton — penonton tetap pakai getFullState() asli.
+    getStateForPlayer(recipientPlayerId) {
         const state = this.getFullState();
+        if (!this._hiddenIdMap) this._hiddenIdMap = new Map();
+        const hideId = (realId) => {
+            if (!this._hiddenIdMap.has(realId)) {
+                this._hiddenIdMap.set(realId, 'h_' + Math.random().toString(36).slice(2) + Date.now().toString(36));
+            }
+            return this._hiddenIdMap.get(realId);
+        };
+        state.players = state.players.map(p => {
+            if (p.id === recipientPlayerId) return p; // pemilik: data tangan tetap utuh
+            if (!Array.isArray(p.hand)) return p;
+            return { ...p, hand: p.hand.map(c => ({ id: hideId(c.id) })) };
+        });
+        return state;
+    }
+
+    broadcastGameState() {
         this.gs.players.forEach(p => {
             if (!p.isBot && p.socket) {
+                const state = this.getStateForPlayer(p.id);
                 try { p.socket.send(JSON.stringify({ type: 'GAME_STATE_UPDATE', state })); } catch(e) {}
             }
         });
-        this.spectatorSockets.forEach(s => {
-            if (s.readyState === WebSocket.OPEN) {
-                try { s.send(JSON.stringify({ type: 'GAME_STATE_UPDATE', state, isSpectator: true })); } catch(e) {}
-            }
-        });
+        if (this.spectatorSockets.length > 0) {
+            const fullState = this.getFullState();
+            this.spectatorSockets.forEach(s => {
+                if (s.readyState === WebSocket.OPEN) {
+                    try { s.send(JSON.stringify({ type: 'GAME_STATE_UPDATE', state: fullState, isSpectator: true })); } catch(e) {}
+                }
+            });
+        }
     }
 
     broadcastLog(message) {
@@ -3113,8 +3143,7 @@ class MatchmakingQueue {
             try {
                 room.status = 'playing';
                 gameEngine.startGame();
-                const startState = gameEngine.getFullState();
-                players.forEach(p => { try { p.socket.send(JSON.stringify({ type: 'GAME_STARTED', roomId, playerId: p.id, state: startState })); } catch(e) {} });
+                players.forEach(p => { try { p.socket.send(JSON.stringify({ type: 'GAME_STARTED', roomId, playerId: p.id, state: gameEngine.getStateForPlayer(p.id) })); } catch(e) {} });
             } catch (err) {
                 console.error(`❌ startGame error room ${roomId}:`, err);
                 room.status = 'finished';
@@ -3409,9 +3438,8 @@ class MatchmakingQueue {
             setTimeout(() => {
                 gameRoom.status = 'playing';
                 gameEngine.startGame();
-                const state = gameEngine.getFullState();
-                room.players.forEach(p => { if (p.socket.readyState === WebSocket.OPEN) { try { p.socket.send(JSON.stringify({ type: 'GAME_STARTED', roomId, playerId: p.id, state, isCustomRoom: true })); } catch(_) {} } });
-                if (room.spectatorSocket?.readyState === WebSocket.OPEN) { try { room.spectatorSocket.send(JSON.stringify({ type: 'GAME_STARTED', roomId, playerId: null, isSpectator: true, state, isCustomRoom: true })); } catch(_) {} }
+                room.players.forEach(p => { if (p.socket.readyState === WebSocket.OPEN) { try { p.socket.send(JSON.stringify({ type: 'GAME_STARTED', roomId, playerId: p.id, state: gameEngine.getStateForPlayer(p.id), isCustomRoom: true })); } catch(_) {} } });
+                if (room.spectatorSocket?.readyState === WebSocket.OPEN) { try { room.spectatorSocket.send(JSON.stringify({ type: 'GAME_STARTED', roomId, playerId: null, isSpectator: true, state: gameEngine.getFullState(), isCustomRoom: true })); } catch(_) {} }
             }, 6000);
             return true;
         } catch (error) {
@@ -3830,7 +3858,7 @@ wss.on('connection', (socket) => {
                         const room = matchmaking.getRoom(data.roomId);
                         if (room) {
                             room.gameEngine.setPlayerAutoMode(currentPlayer.id, false);
-                            try { socket.send(JSON.stringify({ type: 'GAME_STATE_UPDATE', state: room.gameEngine.getFullState() })); } catch(e) {}
+                            try { socket.send(JSON.stringify({ type: 'GAME_STATE_UPDATE', state: room.gameEngine.getStateForPlayer(currentPlayer.id) })); } catch(e) {}
                         }
                     }
                     break;
@@ -3892,11 +3920,11 @@ wss.on('connection', (socket) => {
                                 // Jika sudah: kirim GAME_STARTED dengan state lengkap.
                                 const gameActuallyStarted = room.gameEngine.gs.drawPile.length > 0;
                                 if (gameActuallyStarted) {
-                                    try { socket.send(JSON.stringify({ type: 'GAME_STARTED', roomId: data.roomId, playerId: data.playerId, state: room.gameEngine.getFullState(), isCustomRoom: room.gameEngine.isCustomRoom })); } catch(_) {}
+                                    try { socket.send(JSON.stringify({ type: 'GAME_STARTED', roomId: data.roomId, playerId: data.playerId, state: room.gameEngine.getStateForPlayer(data.playerId), isCustomRoom: room.gameEngine.isCustomRoom })); } catch(_) {}
                                 } else {
                                     const remainingMs = Math.max(0, 6000 - (Date.now() - room.createdAt));
                                     try { socket.send(JSON.stringify({ type: 'PROVINCES_SELECTED', provinces: room.gameEngine.selectedProvinces, mandatory: 'Bangka Belitung', remainingMs, roomId: data.roomId, playerId: data.playerId })); } catch(_) {}
-                                    try { socket.send(JSON.stringify({ type: 'GAME_STATE_UPDATE', state: room.gameEngine.getFullState() })); } catch(_) {}
+                                    try { socket.send(JSON.stringify({ type: 'GAME_STATE_UPDATE', state: room.gameEngine.getStateForPlayer(data.playerId) })); } catch(_) {}
                                 }
                             }
                         } else {
